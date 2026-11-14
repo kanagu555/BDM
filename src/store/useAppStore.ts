@@ -88,23 +88,33 @@ const INITIAL_RECENT_SITES: RecentSite[] = [
 interface AppStoreState {
   themeMode: ThemeMode;
   currentUrl: string;
+  pageTitle: string;
+  isDesktopMode: boolean;
+  webViewSessionKey: number;
   isAddressResolving: boolean;
   quickAccessSites: QuickAccessSite[];
   recentSites: RecentSite[];
   downloads: DownloadItem[];
   setThemeMode: (mode: ThemeMode) => void;
   setIsAddressResolving: (loading: boolean) => void;
+  setCurrentUrl: (url: string) => void;
+  toggleDesktopMode: () => void;
   openAddressInput: (rawInput: string) => {
     targetUrl: string;
     displayTitle: string;
   };
+  recordPageVisit: (url: string, title?: string) => void;
   removeRecentSite: (id: string) => void;
   clearRecentSites: () => void;
+  clearBrowserSessionData: () => void;
 }
 
 export const useAppStore = create<AppStoreState>((set) => ({
   themeMode: 'system',
   currentUrl: 'https://www.w3schools.com/html/html5_video.asp',
+  pageTitle: 'HTML5 Video Demo',
+  isDesktopMode: false,
+  webViewSessionKey: 1,
   isAddressResolving: false,
   quickAccessSites: INITIAL_QUICK_ACCESS,
   recentSites: INITIAL_RECENT_SITES,
@@ -113,6 +123,11 @@ export const useAppStore = create<AppStoreState>((set) => ({
   setThemeMode: (mode) => set({ themeMode: mode }),
 
   setIsAddressResolving: (loading) => set({ isAddressResolving: loading }),
+
+  setCurrentUrl: (url) => set({ currentUrl: url }),
+
+  toggleDesktopMode: () =>
+    set((state) => ({ isDesktopMode: !state.isDesktopMode })),
 
   openAddressInput: (rawInput: string) => {
     const resolved = BrowserService.resolveInput(rawInput);
@@ -131,7 +146,8 @@ export const useAppStore = create<AppStoreState>((set) => ({
       );
       return {
         currentUrl: resolved.targetUrl,
-        recentSites: [newRecent, ...filtered].slice(0, 12),
+        pageTitle: resolved.displayTitle,
+        recentSites: [newRecent, ...filtered].slice(0, 15),
       };
     });
 
@@ -141,10 +157,45 @@ export const useAppStore = create<AppStoreState>((set) => ({
     };
   },
 
+  recordPageVisit: (url: string, title?: string) => {
+    if (!url || !/^https?:\/\//i.test(url)) {
+      return;
+    }
+    const hostname = BrowserService.getHostname(url);
+    const cleanTitle =
+      title && title.trim() && !/^https?:\/\//i.test(title.trim())
+        ? title.trim()
+        : BrowserService.getDomainTitle(url);
+
+    set((state) => {
+      const filtered = state.recentSites.filter(
+        (site) => site.url.toLowerCase() !== url.toLowerCase(),
+      );
+      const updatedEntry: RecentSite = {
+        id: `rec-${Date.now()}`,
+        title: cleanTitle,
+        url,
+        hostname,
+        visitedAt: 'Just now',
+        isSearch: url.includes('google.com/search?q='),
+      };
+      return {
+        pageTitle: cleanTitle,
+        recentSites: [updatedEntry, ...filtered].slice(0, 15),
+      };
+    });
+  },
+
   removeRecentSite: (id: string) =>
     set((state) => ({
       recentSites: state.recentSites.filter((item) => item.id !== id),
     })),
 
   clearRecentSites: () => set({ recentSites: [] }),
+
+  clearBrowserSessionData: () =>
+    set((state) => ({
+      recentSites: [],
+      webViewSessionKey: state.webViewSessionKey + 1,
+    })),
 }));

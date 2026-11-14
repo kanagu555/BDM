@@ -14,7 +14,9 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
 
 export const SettingsScreen: React.FC = () => {
   const { colors, themeMode, setThemeMode } = useAppTheme();
-  const clearRecentSites = useAppStore((state) => state.clearRecentSites);
+  const clearBrowserSessionData = useAppStore(
+    (state) => state.clearBrowserSessionData,
+  );
 
   return (
     <SafeAreaView
@@ -96,7 +98,7 @@ export const SettingsScreen: React.FC = () => {
           </View>
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={clearRecentSites}
+            onPress={clearBrowserSessionData}
             style={[
               styles.clearBtn,
               { backgroundColor: colors.primarySoft },
@@ -117,7 +119,7 @@ export const SettingsScreen: React.FC = () => {
           About BDM
         </Text>
         <Text style={[styles.infoValue, { color: colors.textSecondary }]}>
-          BDM - Browser & Download Manager • Version 1.0.0 (MVP Phase 1)
+          BDM - Browser & Download Manager • Version 1.0.0 (MVP Phase 2)
         </Text>
       </View>
     </SafeAreaView>

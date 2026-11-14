@@ -111,6 +111,131 @@ export const ArrowRightIcon: React.FC<IconProps> = ({ size = 18, color = '#FFFFF
   </Svg>
 );
 
+export const ChevronLeftIcon: React.FC<IconProps> = ({ size = 20, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M15 18L9 12L15 6"
+      stroke={color}
+      strokeWidth="2.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
+
+export const ChevronRightIcon: React.FC<IconProps> = ({ size = 20, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M9 18L15 12L9 6"
+      stroke={color}
+      strokeWidth="2.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
+
+export const ReloadIcon: React.FC<IconProps> = ({ size = 19, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5V9H8"
+      stroke={color}
+      strokeWidth="2.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <Path
+      d="M4 13A8.1 8.1 0 0 0 19.5 15M20 19V15H16"
+      stroke={color}
+      strokeWidth="2.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
+
+export const LockIcon: React.FC<IconProps> = ({ size = 15, color = '#10B981' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Rect
+      x="5"
+      y="11"
+      width="14"
+      height="10"
+      rx="2.5"
+      stroke={color}
+      strokeWidth="2.1"
+    />
+    <Path
+      d="M8 11V7A4 4 0 0 1 16 7V11"
+      stroke={color}
+      strokeWidth="2.1"
+      strokeLinecap="round"
+    />
+  </Svg>
+);
+
+export const AlertTriangleIcon: React.FC<IconProps> = ({ size = 16, color = '#F59E0B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M10.29 3.86L1.82 18A2 2 0 0 0 3.54 21H20.46A2 2 0 0 0 22.18 18L13.71 3.86A2 2 0 0 0 10.29 3.86Z"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <Path d="M12 9V13" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
+    <Circle cx="12" cy="17" r="1" fill={color} />
+  </Svg>
+);
+
+export const MoreVerticalIcon: React.FC<IconProps> = ({ size = 20, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Circle cx="12" cy="5.5" r="1.8" fill={color} />
+    <Circle cx="12" cy="12" r="1.8" fill={color} />
+    <Circle cx="12" cy="18.5" r="1.8" fill={color} />
+  </Svg>
+);
+
+export const ShareIcon: React.FC<IconProps> = ({ size = 18, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Circle cx="18" cy="5" r="3" stroke={color} strokeWidth="2" />
+    <Circle cx="6" cy="12" r="3" stroke={color} strokeWidth="2" />
+    <Circle cx="18" cy="19" r="3" stroke={color} strokeWidth="2" />
+    <Path
+      d="M8.59 13.51L15.42 17.49M15.41 6.51L8.59 10.49"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+  </Svg>
+);
+
+export const DesktopIcon: React.FC<IconProps> = ({ size = 18, color = '#18181B' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Rect x="2" y="3" width="20" height="14" rx="2" stroke={color} strokeWidth="2" />
+    <Path d="M8 21H16M12 17V21" stroke={color} strokeWidth="2" strokeLinecap="round" />
+  </Svg>
+);
+
+export const TrashIcon: React.FC<IconProps> = ({ size = 18, color = '#EF4444' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M3 6H5H21"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <Path
+      d="M8 6V4C8 3.44772 8.44772 3 9 3H15C15.5523 3 16 3.44772 16 4V6M19 6V20C19 20.5523 18.5523 21 18 21H6C5.44772 21 5 20.5523 5 20V6H19Z"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
+
 export const CloseIcon: React.FC<IconProps> = ({ size = 18, color = '#71717A' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path
