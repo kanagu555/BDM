@@ -30,6 +30,7 @@ import {
   WebViewProgressEvent,
 } from 'react-native-webview/lib/WebViewTypes';
 import { FloatingDownloadButton } from '../../components/FloatingDownloadButton';
+import { DownloadBottomSheet } from '../../components/DownloadBottomSheet';
 import {
   AlertTriangleIcon,
   ChevronLeftIcon,
@@ -52,7 +53,7 @@ import { BrowserService } from '../../services/BrowserService';
 import { VideoDetectionService } from '../../services/VideoDetectionService';
 import { useAppStore } from '../../store/useAppStore';
 import { Radius, Spacing, Typography } from '../../theme';
-import { RootTabParamList } from '../../types';
+import { DetectedVideo, RootTabParamList } from '../../types';
 
 type BrowserNavigationProp = BottomTabNavigationProp<
   RootTabParamList,
@@ -96,8 +97,8 @@ export const BrowserScreen: React.FC = () => {
   const [loadError, setLoadError] = useState<LoadErrorState | null>(null);
   const [showSecurityBanner, setShowSecurityBanner] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const [isDetectedPreviewVisible, setIsDetectedPreviewVisible] =
-    useState(false);
+  const [isDownloadSheetVisible, setIsDownloadSheetVisible] = useState(false);
+  const [queuedNotice, setQueuedNotice] = useState<string | null>(null);
 
   // Sync route initialUrl if navigated from HomeScreen
   useEffect(() => {
@@ -438,7 +439,7 @@ export const BrowserScreen: React.FC = () => {
       {detectedVideos.length > 0 && !loadError ? (
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => setIsDetectedPreviewVisible(true)}
+          onPress={() => setIsDownloadSheetVisible(true)}
           style={[
             styles.detectedBanner,
             {
@@ -458,9 +459,31 @@ export const BrowserScreen: React.FC = () => {
           </View>
           <Text
             style={[styles.detectedBannerAction, { color: colors.secondary }]}>
-            View
+            Download
           </Text>
         </TouchableOpacity>
+      ) : null}
+
+      {/* Queued Download Feedback Banner */}
+      {queuedNotice ? (
+        <View
+          style={[
+            styles.queuedNoticeBanner,
+            {
+              backgroundColor: `${colors.success}1A`,
+              borderBottomColor: colors.border,
+            },
+          ]}>
+          <ShieldIcon size={16} color={colors.success} />
+          <Text
+            numberOfLines={1}
+            style={[styles.queuedNoticeText, { color: colors.textPrimary }]}>
+            {queuedNotice}
+          </Text>
+          <TouchableOpacity onPress={() => setQueuedNotice(null)}>
+            <CloseIcon size={14} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
       ) : null}
 
       {/* Optional Security Connection Banner (when padlock is tapped) */}
@@ -559,7 +582,7 @@ export const BrowserScreen: React.FC = () => {
         <FloatingDownloadButton
           visible={detectedVideos.length > 0 && !loadError}
           count={detectedVideos.length}
-          onPress={() => setIsDetectedPreviewVisible(true)}
+          onPress={() => setIsDownloadSheetVisible(true)}
         />
 
         {/* Webpage Loading Error Overlay */}
@@ -642,93 +665,19 @@ export const BrowserScreen: React.FC = () => {
         ) : null}
       </View>
 
-      {/* Detected Videos Preview Modal (Phase 3 verification, upgraded to full Bottom Sheet in Phase 4) */}
-      <Modal
-        visible={isDetectedPreviewVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setIsDetectedPreviewVisible(false)}>
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => setIsDetectedPreviewVisible(false)}>
-          <Pressable
-            style={[
-              styles.menuSheet,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
-            onPress={(e) => e.stopPropagation()}>
-            <View style={styles.sheetHandleWrap}>
-              <View
-                style={[
-                  styles.sheetHandle,
-                  { backgroundColor: colors.border },
-                ]}
-              />
-            </View>
-
-            <View style={styles.detectedSheetHeader}>
-              <View style={styles.detectedSheetTitleRow}>
-                <VideoIcon size={20} color={colors.primary} />
-                <Text
-                  style={[
-                    styles.detectedSheetTitle,
-                    { color: colors.textPrimary },
-                  ]}>
-                  Detected Videos ({detectedVideos.length})
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setIsDetectedPreviewVisible(false)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <CloseIcon size={18} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            {detectedVideos.map((vid) => (
-              <View
-                key={vid.id}
-                style={[
-                  styles.detectedVideoItem,
-                  {
-                    backgroundColor: colors.surfaceElevated,
-                    borderColor: colors.border,
-                  },
-                ]}>
-                <View style={styles.detectedVideoTopRow}>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.detectedVideoTitle,
-                      { color: colors.textPrimary },
-                    ]}>
-                    {vid.title}
-                  </Text>
-                  <View
-                    style={[
-                      styles.extBadge,
-                      { backgroundColor: colors.primary },
-                    ]}>
-                    <Text style={styles.extBadgeText}>
-                      {vid.extension.toUpperCase()}
-                    </Text>
-                  </View>
-                </View>
-                <Text
-                  numberOfLines={2}
-                  style={[
-                    styles.detectedVideoUrl,
-                    { color: colors.textSecondary },
-                  ]}>
-                  {vid.url}
-                </Text>
-              </View>
-            ))}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      {/* Modern Download Bottom Sheet (Phase 4) */}
+      <DownloadBottomSheet
+        visible={isDownloadSheetVisible}
+        videos={detectedVideos}
+        onClose={() => setIsDownloadSheetVisible(false)}
+        onDownload={(video: DetectedVideo, fileName: string) => {
+          setIsDownloadSheetVisible(false);
+          setQueuedNotice(`Selected "${fileName}" (${video.extension.toUpperCase()})`);
+          setTimeout(() => {
+            setQueuedNotice(null);
+          }, 4000);
+        }}
+      />
 
       {/* Browser Actions Modal / Bottom Sheet */}
       <Modal
@@ -1031,6 +980,19 @@ const styles = StyleSheet.create({
   detectedBannerAction: {
     ...Typography.caption,
     fontWeight: '800',
+  },
+  queuedNoticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  queuedNoticeText: {
+    ...Typography.caption,
+    fontWeight: '600',
+    flex: 1,
   },
   securityBanner: {
     paddingHorizontal: Spacing.md,
