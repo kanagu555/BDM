@@ -119,7 +119,7 @@ export const SettingsScreen: React.FC = () => {
           About BDM
         </Text>
         <Text style={[styles.infoValue, { color: colors.textSecondary }]}>
-          BDM - Browser & Download Manager • Version 1.0.0 (MVP Phase 5)
+          BDM - Browser & Download Manager • Version 1.0.0 (MVP Phase 6)
         </Text>
       </View>
     </SafeAreaView>

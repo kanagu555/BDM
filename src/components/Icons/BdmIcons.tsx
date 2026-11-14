@@ -286,3 +286,29 @@ export const ShieldIcon: React.FC<IconProps> = ({ size = 16, color = '#10B981' }
     />
   </Svg>
 );
+
+export const PlayIcon: React.FC<IconProps> = ({ size = 18, color = '#FFFFFF' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M6 4.5L19 12L6 19.5V4.5Z"
+      fill={color}
+      stroke={color}
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
+
+export const CheckCircleIcon: React.FC<IconProps> = ({ size = 16, color = '#10B981' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2" />
+    <Path
+      d="M8.5 12.3L10.8 14.6L15.5 9.8"
+      stroke={color}
+      strokeWidth="2.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);

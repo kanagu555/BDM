@@ -122,6 +122,7 @@ interface AppStoreState {
   deleteDownloadById: (id: string) => Promise<void>;
   openDownloadedVideo: (id: string) => Promise<void>;
   shareDownloadedVideo: (id: string) => Promise<void>;
+  retryDownloadById: (id: string) => Promise<void>;
 }
 
 export const useAppStore = create<AppStoreState>((set, get) => ({
@@ -341,5 +342,37 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       target.mimeType,
       target.title,
     );
+  },
+
+  retryDownloadById: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      return;
+    }
+    const isDesktop = get().isDesktopMode;
+    const nativeRes = await DownloadService.startDownload({
+      url: target.url,
+      fileName: target.fileName,
+      title: target.title,
+      mimeType: target.mimeType,
+      userAgent: BrowserService.getUserAgent(isDesktop),
+    });
+
+    set((state) => ({
+      downloads: state.downloads.map((d) =>
+        d.id === id
+          ? {
+              ...d,
+              downloadManagerId: nativeRes.downloadId,
+              fileName: nativeRes.fileName,
+              relativePath: nativeRes.relativePath,
+              status: 'downloading',
+              progress: 0,
+              downloadedBytes: 0,
+              errorMessage: undefined,
+            }
+          : d,
+      ),
+    }));
   },
 }));
