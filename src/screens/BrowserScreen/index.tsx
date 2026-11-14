@@ -87,6 +87,7 @@ export const BrowserScreen: React.FC = () => {
   const clearBrowserSessionData = useAppStore(
     (state) => state.clearBrowserSessionData,
   );
+  const startVideoDownload = useAppStore((state) => state.startVideoDownload);
 
   const [addressBarText, setAddressBarText] = useState(currentUrl);
   const [isEditingAddress, setIsEditingAddress] = useState(false);
@@ -480,6 +481,20 @@ export const BrowserScreen: React.FC = () => {
             style={[styles.queuedNoticeText, { color: colors.textPrimary }]}>
             {queuedNotice}
           </Text>
+          <TouchableOpacity
+            onPress={() => {
+              setQueuedNotice(null);
+              navigation.navigate('Downloads');
+            }}
+            style={styles.viewDownloadsBannerBtn}>
+            <Text
+              style={[
+                styles.viewDownloadsBannerText,
+                { color: colors.primary },
+              ]}>
+              Open
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setQueuedNotice(null)}>
             <CloseIcon size={14} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -665,17 +680,24 @@ export const BrowserScreen: React.FC = () => {
         ) : null}
       </View>
 
-      {/* Modern Download Bottom Sheet (Phase 4) */}
+      {/* Modern Download Bottom Sheet (Phase 4 & 5) */}
       <DownloadBottomSheet
         visible={isDownloadSheetVisible}
         videos={detectedVideos}
         onClose={() => setIsDownloadSheetVisible(false)}
-        onDownload={(video: DetectedVideo, fileName: string) => {
+        onDownload={async (video: DetectedVideo, fileName: string) => {
           setIsDownloadSheetVisible(false);
-          setQueuedNotice(`Selected "${fileName}" (${video.extension.toUpperCase()})`);
-          setTimeout(() => {
-            setQueuedNotice(null);
-          }, 4000);
+          try {
+            const item = await startVideoDownload(video, fileName);
+            setQueuedNotice(`Downloading ${item.fileName} to Downloads/BDM`);
+            setTimeout(() => {
+              setQueuedNotice(null);
+            }, 5000);
+          } catch (err: any) {
+            setQueuedNotice(
+              err?.message || 'Failed to start download via DownloadManager.',
+            );
+          }
         }}
       />
 
@@ -993,6 +1015,14 @@ const styles = StyleSheet.create({
     ...Typography.caption,
     fontWeight: '600',
     flex: 1,
+  },
+  viewDownloadsBannerBtn: {
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 2,
+  },
+  viewDownloadsBannerText: {
+    ...Typography.caption,
+    fontWeight: '800',
   },
   securityBanner: {
     paddingHorizontal: Spacing.md,

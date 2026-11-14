@@ -7,6 +7,8 @@ import {
   ThemeMode,
 } from '../types';
 import { BrowserService } from '../services/BrowserService';
+import { DownloadService } from '../services/DownloadService';
+import { NativeDownloadProgressEvent } from '../native';
 
 const INITIAL_QUICK_ACCESS: QuickAccessSite[] = [
   {
@@ -111,9 +113,18 @@ interface AppStoreState {
   removeRecentSite: (id: string) => void;
   clearRecentSites: () => void;
   clearBrowserSessionData: () => void;
+  startVideoDownload: (
+    video: DetectedVideo,
+    customFileName: string,
+  ) => Promise<DownloadItem>;
+  applyNativeDownloadProgress: (event: NativeDownloadProgressEvent) => void;
+  cancelDownloadById: (id: string) => Promise<void>;
+  deleteDownloadById: (id: string) => Promise<void>;
+  openDownloadedVideo: (id: string) => Promise<void>;
+  shareDownloadedVideo: (id: string) => Promise<void>;
 }
 
-export const useAppStore = create<AppStoreState>((set) => ({
+export const useAppStore = create<AppStoreState>((set, get) => ({
   themeMode: 'system',
   currentUrl: 'https://www.w3schools.com/html/html5_video.asp',
   pageTitle: 'HTML5 Video Demo',
@@ -209,4 +220,126 @@ export const useAppStore = create<AppStoreState>((set) => ({
       detectedVideos: [],
       webViewSessionKey: state.webViewSessionKey + 1,
     })),
+
+  startVideoDownload: async (video: DetectedVideo, customFileName: string) => {
+    const isDesktop = get().isDesktopMode;
+    const nativeRes = await DownloadService.startDownload({
+      url: video.url,
+      fileName: customFileName,
+      title: video.title,
+      mimeType: video.mimeType,
+      userAgent: BrowserService.getUserAgent(isDesktop),
+    });
+
+    const newItem: DownloadItem = {
+      id: `dl-${nativeRes.downloadId}`,
+      downloadManagerId: nativeRes.downloadId,
+      title: video.title,
+      fileName: nativeRes.fileName,
+      extension: video.extension,
+      mimeType: video.mimeType,
+      url: video.url,
+      relativePath: nativeRes.relativePath,
+      fileSize: 0,
+      downloadedBytes: 0,
+      progress: 0,
+      status: 'downloading',
+      createdAt: Date.now(),
+    };
+
+    set((state) => ({
+      downloads: [newItem, ...state.downloads],
+    }));
+
+    return newItem;
+  },
+
+  applyNativeDownloadProgress: (event: NativeDownloadProgressEvent) => {
+    set((state) => {
+      const exists = state.downloads.some(
+        (item) => item.downloadManagerId === event.downloadId,
+      );
+      if (!exists) {
+        return state;
+      }
+
+      return {
+        downloads: state.downloads.map((item) => {
+          if (item.downloadManagerId !== event.downloadId) {
+            return item;
+          }
+          return {
+            ...item,
+            status: event.status,
+            downloadedBytes:
+              event.bytesDownloaded > 0
+                ? event.bytesDownloaded
+                : item.downloadedBytes,
+            fileSize:
+              event.totalBytes > 0 ? event.totalBytes : item.fileSize,
+            progress:
+              event.status === 'completed'
+                ? 100
+                : Math.round(event.progress * 10) / 10,
+            localUri: event.localUri || item.localUri,
+            errorMessage: event.errorMessage || item.errorMessage,
+          };
+        }),
+      };
+    });
+  },
+
+  cancelDownloadById: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      return;
+    }
+    try {
+      await DownloadService.cancelDownload(target.downloadManagerId);
+    } catch {
+      // Ignore if already removed by OS
+    }
+    set((state) => ({
+      downloads: state.downloads.map((d) =>
+        d.id === id ? { ...d, status: 'cancelled', progress: 0 } : d,
+      ),
+    }));
+  },
+
+  deleteDownloadById: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (target) {
+      try {
+        await DownloadService.removeDownloadedFile(target.downloadManagerId);
+      } catch {
+        // Ignore if file already deleted
+      }
+    }
+    set((state) => ({
+      downloads: state.downloads.filter((d) => d.id !== id),
+    }));
+  },
+
+  openDownloadedVideo: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      throw new Error('Download entry not found.');
+    }
+    await DownloadService.openDownloadedFile(
+      target.downloadManagerId,
+      target.mimeType,
+    );
+  },
+
+  shareDownloadedVideo: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      throw new Error('Download entry not found.');
+    }
+    await DownloadService.shareDownloadedFile(
+      target.downloadManagerId,
+      target.mimeType,
+      target.title,
+    );
+  },
 }));

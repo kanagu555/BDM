@@ -46,11 +46,14 @@ export type DownloadStatus =
 
 export interface DownloadItem {
   id: string;
-  downloadManagerId?: number;
+  downloadManagerId: string;
   title: string;
   fileName: string;
+  extension: 'mp4' | 'webm';
+  mimeType: string;
   url: string;
-  filePath?: string;
+  relativePath: string;
+  localUri?: string;
   fileSize: number;
   downloadedBytes: number;
   progress: number;

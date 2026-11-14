@@ -17,12 +17,17 @@ import {
   SettingsIcon,
 } from '../components/Icons/BdmIcons';
 import { useAppTheme } from '../hooks/useAppTheme';
+import { useAppStore } from '../store/useAppStore';
 import { RootTabParamList } from '../types';
 
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
 export const RootNavigator: React.FC = () => {
   const { colors, isDark } = useAppTheme();
+  const downloads = useAppStore((state) => state.downloads);
+  const activeCount = downloads.filter(
+    (d) => d.status === 'downloading' || d.status === 'pending',
+  ).length;
 
   const navTheme = {
     ...(isDark ? DarkTheme : DefaultTheme),
@@ -79,6 +84,13 @@ export const RootNavigator: React.FC = () => {
           component={DownloadsScreen}
           options={{
             tabBarLabel: 'Downloads',
+            tabBarBadge: activeCount > 0 ? activeCount : undefined,
+            tabBarBadgeStyle: {
+              backgroundColor: colors.primary,
+              color: '#FFFFFF',
+              fontSize: 10,
+              fontWeight: '700',
+            },
             tabBarIcon: ({ color, size }) => (
               <DownloadIcon size={size ?? 20} color={color} />
             ),
