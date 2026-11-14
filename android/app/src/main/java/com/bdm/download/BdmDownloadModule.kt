@@ -62,8 +62,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         if (id != -1L && trackedIds.containsKey(id)) {
           val stateMap = querySingleDownloadInternal(id)
           if (stateMap != null) {
-            emitProgressEvent(stateMap)
             val status = stateMap.getString("status")
+            emitProgressEvent(stateMap)
             if (status == "completed" || status == "failed" || status == "cancelled") {
               trackedIds.remove(id)
             }
@@ -122,8 +122,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     for (dmId in activeKeys) {
       val map = querySingleDownloadInternal(dmId)
       if (map != null) {
-        emitProgressEvent(map)
         val status = map.getString("status")
+        emitProgressEvent(map)
         if (status == "completed" || status == "failed" || status == "cancelled") {
           trackedIds.remove(dmId)
         }
