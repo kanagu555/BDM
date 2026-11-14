@@ -29,9 +29,10 @@ export interface DetectedVideo {
   id: string;
   url: string;
   title: string;
-  extension: string;
-  mimeType?: string;
+  extension: 'mp4' | 'webm';
+  mimeType: string;
   pageUrl: string;
+  durationSeconds?: number;
   detectedAt: number;
 }
 

@@ -19,12 +19,17 @@ import {
   useRoute,
 } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { WebView, WebViewNavigation } from 'react-native-webview';
+import {
+  WebView,
+  WebViewMessageEvent,
+  WebViewNavigation,
+} from 'react-native-webview';
 import {
   WebViewErrorEvent,
   WebViewHttpErrorEvent,
   WebViewProgressEvent,
 } from 'react-native-webview/lib/WebViewTypes';
+import { FloatingDownloadButton } from '../../components/FloatingDownloadButton';
 import {
   AlertTriangleIcon,
   ChevronLeftIcon,
@@ -40,9 +45,11 @@ import {
   ShareIcon,
   ShieldIcon,
   TrashIcon,
+  VideoIcon,
 } from '../../components/Icons/BdmIcons';
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { BrowserService } from '../../services/BrowserService';
+import { VideoDetectionService } from '../../services/VideoDetectionService';
 import { useAppStore } from '../../store/useAppStore';
 import { Radius, Spacing, Typography } from '../../theme';
 import { RootTabParamList } from '../../types';
@@ -69,8 +76,11 @@ export const BrowserScreen: React.FC = () => {
   const pageTitle = useAppStore((state) => state.pageTitle);
   const isDesktopMode = useAppStore((state) => state.isDesktopMode);
   const webViewSessionKey = useAppStore((state) => state.webViewSessionKey);
+  const detectedVideos = useAppStore((state) => state.detectedVideos);
   const openAddressInput = useAppStore((state) => state.openAddressInput);
   const setCurrentUrl = useAppStore((state) => state.setCurrentUrl);
+  const setDetectedVideos = useAppStore((state) => state.setDetectedVideos);
+  const clearDetectedVideos = useAppStore((state) => state.clearDetectedVideos);
   const recordPageVisit = useAppStore((state) => state.recordPageVisit);
   const toggleDesktopMode = useAppStore((state) => state.toggleDesktopMode);
   const clearBrowserSessionData = useAppStore(
@@ -86,16 +96,24 @@ export const BrowserScreen: React.FC = () => {
   const [loadError, setLoadError] = useState<LoadErrorState | null>(null);
   const [showSecurityBanner, setShowSecurityBanner] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isDetectedPreviewVisible, setIsDetectedPreviewVisible] =
+    useState(false);
 
   // Sync route initialUrl if navigated from HomeScreen
   useEffect(() => {
     const incomingUrl = route.params?.initialUrl;
     if (incomingUrl && incomingUrl !== currentUrl) {
+      clearDetectedVideos();
       setCurrentUrl(incomingUrl);
       setAddressBarText(incomingUrl);
       setLoadError(null);
     }
-  }, [route.params?.initialUrl, currentUrl, setCurrentUrl]);
+  }, [
+    route.params?.initialUrl,
+    currentUrl,
+    setCurrentUrl,
+    clearDetectedVideos,
+  ]);
 
   // Keep address bar text synced when currentUrl updates externally
   useEffect(() => {
@@ -149,6 +167,7 @@ export const BrowserScreen: React.FC = () => {
   const handleGoBack = () => {
     if (canGoBack) {
       setLoadError(null);
+      clearDetectedVideos();
       webViewRef.current?.goBack();
     }
   };
@@ -156,6 +175,7 @@ export const BrowserScreen: React.FC = () => {
   const handleGoForward = () => {
     if (canGoForward) {
       setLoadError(null);
+      clearDetectedVideos();
       webViewRef.current?.goForward();
     }
   };
@@ -166,8 +186,15 @@ export const BrowserScreen: React.FC = () => {
       webViewRef.current?.stopLoading();
       setIsLoading(false);
     } else {
+      clearDetectedVideos();
       webViewRef.current?.reload();
     }
+  };
+
+  const triggerVideoRescan = () => {
+    webViewRef.current?.injectJavaScript(
+      VideoDetectionService.getRescanScript(),
+    );
   };
 
   const handleNavigationStateChange = (navState: WebViewNavigation) => {
@@ -180,13 +207,26 @@ export const BrowserScreen: React.FC = () => {
       navState.url !== 'about:blank' &&
       /^https?:\/\//i.test(navState.url)
     ) {
-      setCurrentUrl(navState.url);
+      if (navState.url !== currentUrl) {
+        setCurrentUrl(navState.url);
+      }
       if (!isEditingAddress) {
         setAddressBarText(navState.url);
       }
       if (!navState.loading) {
         recordPageVisit(navState.url, navState.title);
+        triggerVideoRescan();
       }
+    }
+  };
+
+  const handleWebViewMessage = (event: WebViewMessageEvent) => {
+    const parsedVideos = VideoDetectionService.parseWebViewMessage(
+      event.nativeEvent.data,
+      currentUrl,
+    );
+    if (parsedVideos !== null) {
+      setDetectedVideos(parsedVideos);
     }
   };
 
@@ -199,6 +239,7 @@ export const BrowserScreen: React.FC = () => {
   const handleWebViewError = (event: WebViewErrorEvent) => {
     const { code, description, url } = event.nativeEvent;
     setIsLoading(false);
+    clearDetectedVideos();
     setLoadError({
       code,
       description:
@@ -209,8 +250,8 @@ export const BrowserScreen: React.FC = () => {
 
   const handleHttpError = (event: WebViewHttpErrorEvent) => {
     const { statusCode, description, url } = event.nativeEvent;
-    // Only surface main document HTTP errors if matching the top-level URL
     if (url === currentUrl && statusCode >= 500) {
+      clearDetectedVideos();
       setLoadError({
         code: statusCode,
         description:
@@ -236,6 +277,7 @@ export const BrowserScreen: React.FC = () => {
   const handleToggleDesktop = () => {
     toggleDesktopMode();
     setIsMenuVisible(false);
+    clearDetectedVideos();
     setTimeout(() => {
       webViewRef.current?.reload();
     }, 100);
@@ -317,7 +359,7 @@ export const BrowserScreen: React.FC = () => {
           </TouchableOpacity>
 
           <TextInput
-            value={isEditingAddress ? addressBarText : addressBarText}
+            value={addressBarText}
             onChangeText={setAddressBarText}
             placeholder="Search or enter URL..."
             placeholderTextColor={colors.textSecondary}
@@ -392,6 +434,35 @@ export const BrowserScreen: React.FC = () => {
         ) : null}
       </View>
 
+      {/* Live Video Detection Status Bar when downloadable videos are found */}
+      {detectedVideos.length > 0 && !loadError ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => setIsDetectedPreviewVisible(true)}
+          style={[
+            styles.detectedBanner,
+            {
+              backgroundColor: colors.primarySoft,
+              borderBottomColor: colors.border,
+            },
+          ]}>
+          <View style={styles.detectedBannerLeft}>
+            <VideoIcon size={16} color={colors.primary} />
+            <Text
+              numberOfLines={1}
+              style={[styles.detectedBannerText, { color: colors.primary }]}>
+              {detectedVideos.length === 1
+                ? `1 Downloadable Video Detected (${detectedVideos[0].extension.toUpperCase()})`
+                : `${detectedVideos.length} Downloadable Videos Detected`}
+            </Text>
+          </View>
+          <Text
+            style={[styles.detectedBannerAction, { color: colors.secondary }]}>
+            View
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
       {/* Optional Security Connection Banner (when padlock is tapped) */}
       {showSecurityBanner ? (
         <View
@@ -437,13 +508,15 @@ export const BrowserScreen: React.FC = () => {
         </View>
       ) : null}
 
-      {/* Main Content: WebView & Error Overlay */}
+      {/* Main Content: WebView, Floating Download Button & Error Overlay */}
       <View style={styles.webViewContainer}>
         <WebView
           key={`bdm-webview-${webViewSessionKey}-${isDesktopMode ? 'desktop' : 'mobile'}`}
           ref={webViewRef}
           source={{ uri: currentUrl }}
           userAgent={BrowserService.getUserAgent(isDesktopMode)}
+          injectedJavaScript={VideoDetectionService.getInjectionScript()}
+          onMessage={handleWebViewMessage}
           javaScriptEnabled={true}
           domStorageEnabled={true}
           allowsFullscreenVideo={true}
@@ -461,14 +534,18 @@ export const BrowserScreen: React.FC = () => {
             return BrowserService.isAllowedNavigationUrl(request.url);
           }}
           onNavigationStateChange={handleNavigationStateChange}
-          onLoadStart={() => {
+          onLoadStart={(event) => {
             setIsLoading(true);
             setLoadError(null);
+            if (event.nativeEvent.url !== currentUrl) {
+              clearDetectedVideos();
+            }
           }}
           onLoadProgress={handleLoadProgress}
           onLoadEnd={() => {
             setIsLoading(false);
             setLoadProgress(1);
+            triggerVideoRescan();
           }}
           onError={handleWebViewError}
           onHttpError={handleHttpError}
@@ -476,6 +553,13 @@ export const BrowserScreen: React.FC = () => {
             styles.webView,
             { backgroundColor: colors.background },
           ]}
+        />
+
+        {/* Floating Download Button (auto-shown when videos are detected) */}
+        <FloatingDownloadButton
+          visible={detectedVideos.length > 0 && !loadError}
+          count={detectedVideos.length}
+          onPress={() => setIsDetectedPreviewVisible(true)}
         />
 
         {/* Webpage Loading Error Overlay */}
@@ -557,6 +641,94 @@ export const BrowserScreen: React.FC = () => {
           </View>
         ) : null}
       </View>
+
+      {/* Detected Videos Preview Modal (Phase 3 verification, upgraded to full Bottom Sheet in Phase 4) */}
+      <Modal
+        visible={isDetectedPreviewVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsDetectedPreviewVisible(false)}>
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setIsDetectedPreviewVisible(false)}>
+          <Pressable
+            style={[
+              styles.menuSheet,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+            onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandleWrap}>
+              <View
+                style={[
+                  styles.sheetHandle,
+                  { backgroundColor: colors.border },
+                ]}
+              />
+            </View>
+
+            <View style={styles.detectedSheetHeader}>
+              <View style={styles.detectedSheetTitleRow}>
+                <VideoIcon size={20} color={colors.primary} />
+                <Text
+                  style={[
+                    styles.detectedSheetTitle,
+                    { color: colors.textPrimary },
+                  ]}>
+                  Detected Videos ({detectedVideos.length})
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setIsDetectedPreviewVisible(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <CloseIcon size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {detectedVideos.map((vid) => (
+              <View
+                key={vid.id}
+                style={[
+                  styles.detectedVideoItem,
+                  {
+                    backgroundColor: colors.surfaceElevated,
+                    borderColor: colors.border,
+                  },
+                ]}>
+                <View style={styles.detectedVideoTopRow}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.detectedVideoTitle,
+                      { color: colors.textPrimary },
+                    ]}>
+                    {vid.title}
+                  </Text>
+                  <View
+                    style={[
+                      styles.extBadge,
+                      { backgroundColor: colors.primary },
+                    ]}>
+                    <Text style={styles.extBadgeText}>
+                      {vid.extension.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+                <Text
+                  numberOfLines={2}
+                  style={[
+                    styles.detectedVideoUrl,
+                    { color: colors.textSecondary },
+                  ]}>
+                  {vid.url}
+                </Text>
+              </View>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Browser Actions Modal / Bottom Sheet */}
       <Modal
@@ -838,6 +1010,28 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
   },
+  detectedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+  },
+  detectedBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    flex: 1,
+  },
+  detectedBannerText: {
+    ...Typography.caption,
+    fontWeight: '700',
+  },
+  detectedBannerAction: {
+    ...Typography.caption,
+    fontWeight: '800',
+  },
   securityBanner: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
@@ -952,6 +1146,50 @@ const styles = StyleSheet.create({
     width: 40,
     height: 4,
     borderRadius: 2,
+  },
+  detectedSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  detectedSheetTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  detectedSheetTitle: {
+    ...Typography.h2,
+  },
+  detectedVideoItem: {
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    gap: 6,
+  },
+  detectedVideoTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  detectedVideoTitle: {
+    ...Typography.subtitle,
+    flex: 1,
+    fontSize: 14,
+  },
+  extBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  extBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  detectedVideoUrl: {
+    ...Typography.caption,
+    fontSize: 11,
   },
   menuPageHeader: {
     flexDirection: 'row',

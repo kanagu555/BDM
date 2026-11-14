@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  DetectedVideo,
   DownloadItem,
   QuickAccessSite,
   RecentSite,
@@ -94,11 +95,14 @@ interface AppStoreState {
   isAddressResolving: boolean;
   quickAccessSites: QuickAccessSite[];
   recentSites: RecentSite[];
+  detectedVideos: DetectedVideo[];
   downloads: DownloadItem[];
   setThemeMode: (mode: ThemeMode) => void;
   setIsAddressResolving: (loading: boolean) => void;
   setCurrentUrl: (url: string) => void;
   toggleDesktopMode: () => void;
+  setDetectedVideos: (videos: DetectedVideo[]) => void;
+  clearDetectedVideos: () => void;
   openAddressInput: (rawInput: string) => {
     targetUrl: string;
     displayTitle: string;
@@ -118,6 +122,7 @@ export const useAppStore = create<AppStoreState>((set) => ({
   isAddressResolving: false,
   quickAccessSites: INITIAL_QUICK_ACCESS,
   recentSites: INITIAL_RECENT_SITES,
+  detectedVideos: [],
   downloads: [],
 
   setThemeMode: (mode) => set({ themeMode: mode }),
@@ -128,6 +133,10 @@ export const useAppStore = create<AppStoreState>((set) => ({
 
   toggleDesktopMode: () =>
     set((state) => ({ isDesktopMode: !state.isDesktopMode })),
+
+  setDetectedVideos: (videos) => set({ detectedVideos: videos }),
+
+  clearDetectedVideos: () => set({ detectedVideos: [] }),
 
   openAddressInput: (rawInput: string) => {
     const resolved = BrowserService.resolveInput(rawInput);
@@ -147,6 +156,7 @@ export const useAppStore = create<AppStoreState>((set) => ({
       return {
         currentUrl: resolved.targetUrl,
         pageTitle: resolved.displayTitle,
+        detectedVideos: [],
         recentSites: [newRecent, ...filtered].slice(0, 15),
       };
     });
@@ -196,6 +206,7 @@ export const useAppStore = create<AppStoreState>((set) => ({
   clearBrowserSessionData: () =>
     set((state) => ({
       recentSites: [],
+      detectedVideos: [],
       webViewSessionKey: state.webViewSessionKey + 1,
     })),
 }));
