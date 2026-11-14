@@ -429,11 +429,13 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  @Suppress("UNUSED_PARAMETER")
   fun addListener(eventName: String) {
     // Required for RN NativeEventEmitter
   }
 
   @ReactMethod
+  @Suppress("UNUSED_PARAMETER")
   fun removeListeners(count: Int) {
     // Required for RN NativeEventEmitter
   }

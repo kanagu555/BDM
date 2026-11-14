@@ -20,10 +20,10 @@ const INITIAL_QUICK_ACCESS: QuickAccessSite[] = [
     accentColor: '#6C5CE7',
   },
   {
-    id: 'qa-archive',
-    title: 'Internet Archive',
-    subtitle: 'archive.org/details/movies',
-    url: 'https://archive.org/details/movies',
+    id: 'qa-9anime',
+    title: '9anime.si',
+    subtitle: 'black-clover-season-2-episode-6',
+    url: 'https://9anime.si/watch/black-clover-season-2-episode-6',
     category: 'video',
     accentColor: '#4F46E5',
   },
@@ -362,15 +362,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       downloads: state.downloads.map((d) =>
         d.id === id
           ? {
-              ...d,
-              downloadManagerId: nativeRes.downloadId,
-              fileName: nativeRes.fileName,
-              relativePath: nativeRes.relativePath,
-              status: 'downloading',
-              progress: 0,
-              downloadedBytes: 0,
-              errorMessage: undefined,
-            }
+            ...d,
+            downloadManagerId: nativeRes.downloadId,
+            fileName: nativeRes.fileName,
+            relativePath: nativeRes.relativePath,
+            status: 'downloading',
+            progress: 0,
+            downloadedBytes: 0,
+            errorMessage: undefined,
+          }
           : d,
       ),
     }));
