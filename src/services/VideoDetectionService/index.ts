@@ -1,4 +1,5 @@
 import { DetectedVideo } from '../../types';
+import { NativeBdmDownloadModule } from '../../native';
 
 interface RawWebViewVideoItem {
   url?: string;
@@ -13,6 +14,14 @@ interface RawWebViewVideoMessage {
   pageUrl?: string;
   pageTitle?: string;
   videos?: RawWebViewVideoItem[];
+  iframeUrls?: string[];
+}
+
+export interface ParsedWebViewVideoPayload {
+  videos: DetectedVideo[];
+  iframeUrls: string[];
+  pageUrl: string;
+  pageTitle: string;
 }
 
 /**
@@ -216,6 +225,73 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
         }
       }
 
+      // 4. Inspect <iframe src="..."> player embeds (same-origin DOM + cross-origin URLs)
+      var iframeUrls = [];
+      var seenIframes = {};
+      function addIframeCandidate(rawIframeUrl) {
+        var absIframe = resolveAbsoluteUrl(rawIframeUrl);
+        if (!absIframe || seenIframes[absIframe]) {
+          return;
+        }
+        var lowerIframe = absIframe.toLowerCase();
+        if (
+          lowerIframe.indexOf('google.com/recaptcha') !== -1 ||
+          lowerIframe.indexOf('doubleclick.net') !== -1 ||
+          lowerIframe.indexOf('googlesyndication.com') !== -1 ||
+          lowerIframe.indexOf('chatbro.com') !== -1 ||
+          lowerIframe.indexOf('facebook.com/plugins') !== -1
+        ) {
+          return;
+        }
+        seenIframes[absIframe] = true;
+        if (iframeUrls.length < 6) {
+          iframeUrls.push(absIframe);
+        }
+      }
+
+      var iframeNodes = document.querySelectorAll('iframe');
+      for (var m = 0; m < iframeNodes.length; m++) {
+        var iframeEl = iframeNodes[m];
+        var iSrc =
+          iframeEl.getAttribute('src') ||
+          iframeEl.getAttribute('data-src') ||
+          iframeEl.src ||
+          '';
+        if (iSrc) {
+          addIframeCandidate(iSrc);
+        }
+        try {
+          var innerDoc = iframeEl.contentDocument;
+          if (innerDoc) {
+            var innerVideos = innerDoc.querySelectorAll('video');
+            for (var iv = 0; iv < innerVideos.length; iv++) {
+              var iVid = innerVideos[iv];
+              if (iVid.currentSrc) {
+                addCandidate(iVid.currentSrc, '', pageTitle, iVid.duration, true);
+              }
+              if (iVid.src) {
+                addCandidate(iVid.src, '', pageTitle, iVid.duration, true);
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 5. Also inspect active server switcher buttons with base64 data-token (e.g. 9anime.si)
+      var tokenNodes = document.querySelectorAll('.server-btn.active[data-token], [data-token]');
+      for (var t = 0; t < tokenNodes.length && iframeUrls.length < 4; t++) {
+        var rawToken = tokenNodes[t].getAttribute('data-token') || '';
+        if (rawToken && rawToken.length > 10) {
+          try {
+            var decodedStr = atob(rawToken);
+            var parsedToken = JSON.parse(decodedStr);
+            if (parsedToken && typeof parsedToken.u === 'string') {
+              addIframeCandidate(parsedToken.u);
+            }
+          } catch (e) {}
+        }
+      }
+
       var currentSignature =
         pageUrl +
         '::' +
@@ -223,7 +299,9 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
           .map(function(item) {
             return item.url;
           })
-          .join('|');
+          .join('|') +
+        '::iframes:' +
+        iframeUrls.join('|');
 
       if (!forceEmit && currentSignature === lastSignature) {
         return;
@@ -236,6 +314,7 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
           pageUrl: pageUrl,
           pageTitle: pageTitle,
           videos: detectedList,
+          iframeUrls: iframeUrls,
         })
       );
     } catch (err) {
@@ -338,25 +417,29 @@ export const VideoDetectionService = {
   },
 
   /**
-   * Parses and deduplicates a WebView onMessage payload from the injected detector script.
-   * Returns an array of DetectedVideo items when the message is a BDM_VIDEOS_DETECTED event,
-   * or null if the message is unrelated.
+   * Parses and deduplicates a WebView onMessage payload from the injected detector script,
+   * including both direct <video> sources and embedded player <iframe> URLs.
    */
-  parseWebViewMessage(
+  parseWebViewPayload(
     rawData: string,
     fallbackPageUrl: string,
-  ): DetectedVideo[] | null {
+  ): ParsedWebViewVideoPayload | null {
     if (!rawData || typeof rawData !== 'string') {
       return null;
     }
 
     try {
       const parsed: RawWebViewVideoMessage = JSON.parse(rawData);
-      if (!parsed || parsed.type !== 'BDM_VIDEOS_DETECTED' || !Array.isArray(parsed.videos)) {
+      if (
+        !parsed ||
+        parsed.type !== 'BDM_VIDEOS_DETECTED' ||
+        !Array.isArray(parsed.videos)
+      ) {
         return null;
       }
 
       const pageUrl = parsed.pageUrl || fallbackPageUrl;
+      const pageTitle = (parsed.pageTitle || '').trim();
       const seenUrls = new Set<string>();
       const results: DetectedVideo[] = [];
       const now = Date.now();
@@ -387,7 +470,7 @@ export const VideoDetectionService = {
             : `Video ${results.length + 1}`;
 
         results.push({
-          id: `vid-${ext}-${i}-${ rawUrl.length }`,
+          id: `vid-${ext}-${i}-${rawUrl.length}`,
           url: rawUrl,
           title: cleanTitle,
           extension: ext,
@@ -401,9 +484,88 @@ export const VideoDetectionService = {
         });
       }
 
-      return results;
+      const iframeUrls = Array.isArray(parsed.iframeUrls)
+        ? parsed.iframeUrls.filter(
+            (u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u),
+          )
+        : [];
+
+      return {
+        videos: results,
+        iframeUrls,
+        pageUrl,
+        pageTitle,
+      };
     } catch {
       return null;
     }
+  },
+
+  parseWebViewMessage(
+    rawData: string,
+    fallbackPageUrl: string,
+  ): DetectedVideo[] | null {
+    const payload = this.parseWebViewPayload(rawData, fallbackPageUrl);
+    return payload ? payload.videos : null;
+  },
+
+  /**
+   * Inspects cross-origin embedded video player <iframe> URLs via the native Android
+   * module to extract direct MP4/WebM video streams (such as OPlayer / 9anime embeds).
+   */
+  async resolveIframeVideos(
+    iframeUrls: string[],
+    pageUrl: string,
+    fallbackPageTitle: string,
+    userAgent: string,
+  ): Promise<DetectedVideo[]> {
+    if (!NativeBdmDownloadModule || iframeUrls.length === 0) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const extractedList: DetectedVideo[] = [];
+    const now = Date.now();
+
+    for (let i = 0; i < iframeUrls.length; i++) {
+      const iframeUrl = iframeUrls[i];
+      try {
+        const items = await NativeBdmDownloadModule.extractVideosFromEmbedUrl(
+          iframeUrl,
+          pageUrl,
+          userAgent,
+        );
+        if (!Array.isArray(items)) {
+          continue;
+        }
+        for (let j = 0; j < items.length; j++) {
+          const item = items[j];
+          const url = typeof item?.url === 'string' ? item.url.trim() : '';
+          if (!url || !this.isValidDownloadableVideoUrl(url) || seen.has(url)) {
+            continue;
+          }
+          seen.add(url);
+          const ext: 'mp4' | 'webm' =
+            item.extension === 'webm' ? 'webm' : 'mp4';
+          const title =
+            item.title && item.title.trim().length > 0
+              ? item.title.trim()
+              : fallbackPageTitle || `Embedded Video ${extractedList.length + 1}`;
+          extractedList.push({
+            id: `vid-embed-${ext}-${extractedList.length}-${url.length}`,
+            url,
+            title,
+            extension: ext,
+            mimeType: ext === 'webm' ? 'video/webm' : 'video/mp4',
+            pageUrl,
+            detectedAt: now,
+          });
+        }
+      } catch {
+        // Ignore single iframe extraction error
+      }
+    }
+
+    return extractedList;
   },
 };

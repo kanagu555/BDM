@@ -20,7 +20,12 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import org.json.JSONArray
 
 class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
@@ -283,6 +288,11 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       if (!userAgent.isNullOrBlank()) {
         request.addRequestHeader("User-Agent", userAgent)
       }
+      try {
+        val parsedUri = Uri.parse(trimmedUrl)
+        val origin = "${parsedUri.scheme}://${parsedUri.host}/"
+        request.addRequestHeader("Referer", origin)
+      } catch (_: Exception) {}
 
       val dmId = downloadManager.enqueue(request)
       trackedIds[dmId] = true
@@ -296,6 +306,206 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(response)
     } catch (e: Exception) {
       promise.reject("START_DOWNLOAD_ERROR", e.message ?: "Failed to start download", e)
+    }
+  }
+
+  private fun fetchHtmlContent(
+      targetUrl: String,
+      refererUrl: String?,
+      userAgent: String?
+  ): String? {
+    var conn: HttpURLConnection? = null
+    return try {
+      conn =
+          (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8000
+            readTimeout = 8000
+            instanceFollowRedirects = true
+            if (!userAgent.isNullOrBlank()) {
+              setRequestProperty("User-Agent", userAgent)
+            }
+            if (!refererUrl.isNullOrBlank()) {
+              setRequestProperty("Referer", refererUrl)
+            }
+          }
+      if (conn.responseCode in 200..299) {
+        conn.inputStream.bufferedReader().use { it.readText() }
+      } else {
+        null
+      }
+    } catch (_: Exception) {
+      null
+    } finally {
+      try {
+        conn?.disconnect()
+      } catch (_: Exception) {}
+    }
+  }
+
+  @ReactMethod
+  fun extractVideosFromEmbedUrl(
+      embedUrl: String,
+      refererUrl: String?,
+      userAgent: String?,
+      promise: Promise
+  ) {
+    Executors.newSingleThreadExecutor().execute {
+      try {
+        val trimmedEmbed = embedUrl.trim()
+        if (!trimmedEmbed.startsWith("http://", ignoreCase = true) &&
+            !trimmedEmbed.startsWith("https://", ignoreCase = true)) {
+          promise.resolve(Arguments.createArray())
+          return@execute
+        }
+
+        val resultArray = Arguments.createArray()
+        val seenUrls = HashSet<String>()
+        val visitedPages = HashSet<String>()
+
+        fun scanPageHtml(pageUrl: String, refUrl: String?, depth: Int) {
+          if (depth > 2 || !visitedPages.add(pageUrl)) {
+            return
+          }
+          val html = fetchHtmlContent(pageUrl, refUrl, userAgent) ?: return
+          val baseUri =
+              try {
+                URI(pageUrl)
+              } catch (_: Exception) {
+                return
+              }
+
+          val titleMatch =
+              Regex("""var\s+title\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
+                  ?: Regex("""<title>([^<]+)</title>""", RegexOption.IGNORE_CASE)
+                      .find(html)
+                      ?.groupValues
+                      ?.get(1)
+                      ?.trim()
+                  ?: "Embedded Video"
+
+          fun addCandidate(rawUrl: String, label: String?, extHint: String) {
+            val cleaned = rawUrl.replace("\\/", "/").trim()
+            if (cleaned.isEmpty() ||
+                cleaned.startsWith("blob:", ignoreCase = true) ||
+                cleaned.startsWith("data:", ignoreCase = true) ||
+                cleaned.contains(".m3u8", ignoreCase = true) ||
+                cleaned.contains(".mpd", ignoreCase = true)) {
+              return
+            }
+            val resolvedUrl =
+                try {
+                  baseUri.resolve(cleaned).toString()
+                } catch (_: Exception) {
+                  return
+                }
+            if (!resolvedUrl.startsWith("http://", ignoreCase = true) &&
+                !resolvedUrl.startsWith("https://", ignoreCase = true)) {
+              return
+            }
+            if (!seenUrls.add(resolvedUrl)) {
+              return
+            }
+
+            val ext =
+                if (extHint.equals("webm", ignoreCase = true) ||
+                    resolvedUrl.substringBefore("?").endsWith(".webm", ignoreCase = true)) {
+                  "webm"
+                } else {
+                  "mp4"
+                }
+            val itemMap = Arguments.createMap()
+            itemMap.putString("url", resolvedUrl)
+            val fullTitle =
+                if (!label.isNullOrBlank() && !titleMatch.contains(label, ignoreCase = true)) {
+                  "$titleMatch ($label)"
+                } else {
+                  titleMatch
+                }
+            itemMap.putString("title", fullTitle)
+            itemMap.putString("extension", ext)
+            itemMap.putString("mimeType", if (ext == "webm") "video/webm" else "video/mp4")
+            resultArray.pushMap(itemMap)
+          }
+
+          // 1. Parse `var qualities = [...]` JSON arrays (used by OPlayer / 9animez / common embeds)
+          val qualitiesRegex = Regex("""var\s+qualities\s*=\s*(\[[^\]]+\])""")
+          qualitiesRegex.findAll(html).forEach { match ->
+            try {
+              val arr = JSONArray(match.groupValues[1])
+              for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val qUrl = obj.optString("url", "")
+                val qName = obj.optString("name", "")
+                val qType = obj.optString("type", "")
+                if (qUrl.isNotBlank() && !qType.equals("hls", ignoreCase = true)) {
+                  addCandidate(qUrl, qName, "mp4")
+                }
+              }
+            } catch (_: Exception) {}
+          }
+
+          // 2. Parse <video src="..."> and <source src="..."> tags in the HTML
+          val srcTagRegex =
+              Regex(
+                  """<(?:video|source)\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""",
+                  RegexOption.IGNORE_CASE
+              )
+          srcTagRegex.findAll(html).forEach { match ->
+            addCandidate(match.groupValues[1], null, "mp4")
+          }
+
+          // 3. Parse direct .mp4 / .webm URLs or /stream/<res>/ paths in inline player configs
+          val directStreamRegex =
+              Regex(
+                  """["']((?:https?:\\?/\\?/[^"'\s]+|\/stream\/\d+\/[^"'\s]+)(?:\.mp4|\.webm)?)["']""",
+                  RegexOption.IGNORE_CASE
+              )
+          directStreamRegex.findAll(html).forEach { match ->
+            val candidate = match.groupValues[1].replace("\\/", "/")
+            val lower = candidate.lowercase()
+            if (lower.contains("/stream/") ||
+                lower.substringBefore("?").endsWith(".mp4") ||
+                lower.substringBefore("?").endsWith(".webm")) {
+              addCandidate(candidate, null, if (lower.contains(".webm")) "webm" else "mp4")
+            }
+          }
+
+          // 4. Follow embedded <iframe src="..."> player URLs on the page (up to depth 2)
+          if (depth < 2) {
+            val iframeRegex =
+                Regex(
+                    """<iframe\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+            var iframeCount = 0
+            iframeRegex.findAll(html).forEach { match ->
+              if (iframeCount >= 3) return@forEach
+              val rawIframeSrc = match.groupValues[1].trim()
+              val resolvedIframe =
+                  try {
+                    baseUri.resolve(rawIframeSrc).toString()
+                  } catch (_: Exception) {
+                    return@forEach
+                  }
+              val lower = resolvedIframe.lowercase()
+              if ((lower.startsWith("http://") || lower.startsWith("https://")) &&
+                  !lower.contains("google.com") &&
+                  !lower.contains("doubleclick.net") &&
+                  !lower.contains("chatbro.com") &&
+                  !lower.contains("facebook.com")) {
+                iframeCount++
+                scanPageHtml(resolvedIframe, pageUrl, depth + 1)
+              }
+            }
+          }
+        }
+
+        scanPageHtml(trimmedEmbed, refererUrl, 0)
+        promise.resolve(resultArray)
+      } catch (_: Exception) {
+        promise.resolve(Arguments.createArray())
+      }
     }
   }
 

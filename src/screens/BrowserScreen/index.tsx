@@ -80,7 +80,7 @@ export const BrowserScreen: React.FC = () => {
   const detectedVideos = useAppStore((state) => state.detectedVideos);
   const openAddressInput = useAppStore((state) => state.openAddressInput);
   const setCurrentUrl = useAppStore((state) => state.setCurrentUrl);
-  const setDetectedVideos = useAppStore((state) => state.setDetectedVideos);
+  const mergeDetectedVideos = useAppStore((state) => state.mergeDetectedVideos);
   const clearDetectedVideos = useAppStore((state) => state.clearDetectedVideos);
   const recordPageVisit = useAppStore((state) => state.recordPageVisit);
   const toggleDesktopMode = useAppStore((state) => state.toggleDesktopMode);
@@ -123,6 +123,29 @@ export const BrowserScreen: React.FC = () => {
       setAddressBarText(currentUrl);
     }
   }, [currentUrl, isEditingAddress]);
+
+  // Proactively inspect the active webpage & any embedded player iframes for downloadable videos
+  useEffect(() => {
+    let cancelled = false;
+    const runDeepEmbedScan = async () => {
+      if (!currentUrl || !/^https?:\/\//i.test(currentUrl)) {
+        return;
+      }
+      const discovered = await VideoDetectionService.resolveIframeVideos(
+        [currentUrl],
+        currentUrl,
+        pageTitle,
+        BrowserService.getUserAgent(isDesktopMode),
+      );
+      if (!cancelled && discovered.length > 0) {
+        mergeDetectedVideos(discovered);
+      }
+    };
+    runDeepEmbedScan();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUrl, isDesktopMode, webViewSessionKey, pageTitle, mergeDetectedVideos]);
 
   // Intercept Android Hardware Back button to navigate back inside WebView first
   useFocusEffect(
@@ -195,7 +218,7 @@ export const BrowserScreen: React.FC = () => {
 
   const triggerVideoRescan = () => {
     webViewRef.current?.injectJavaScript(
-      VideoDetectionService.getRescanScript(),
+      VideoDetectionService.getInjectionScript(),
     );
   };
 
@@ -210,6 +233,7 @@ export const BrowserScreen: React.FC = () => {
       /^https?:\/\//i.test(navState.url)
     ) {
       if (navState.url !== currentUrl) {
+        clearDetectedVideos();
         setCurrentUrl(navState.url);
       }
       if (!isEditingAddress) {
@@ -222,13 +246,29 @@ export const BrowserScreen: React.FC = () => {
     }
   };
 
-  const handleWebViewMessage = (event: WebViewMessageEvent) => {
-    const parsedVideos = VideoDetectionService.parseWebViewMessage(
+  const handleWebViewMessage = async (event: WebViewMessageEvent) => {
+    const payload = VideoDetectionService.parseWebViewPayload(
       event.nativeEvent.data,
       currentUrl,
     );
-    if (parsedVideos !== null) {
-      setDetectedVideos(parsedVideos);
+    if (!payload) {
+      return;
+    }
+
+    if (payload.videos.length > 0) {
+      mergeDetectedVideos(payload.videos);
+    }
+
+    if (payload.iframeUrls.length > 0) {
+      const embedVideos = await VideoDetectionService.resolveIframeVideos(
+        payload.iframeUrls,
+        payload.pageUrl || currentUrl,
+        payload.pageTitle || pageTitle,
+        BrowserService.getUserAgent(isDesktopMode),
+      );
+      if (embedVideos.length > 0) {
+        mergeDetectedVideos(embedVideos);
+      }
     }
   };
 
@@ -572,12 +612,9 @@ export const BrowserScreen: React.FC = () => {
             return BrowserService.isAllowedNavigationUrl(request.url);
           }}
           onNavigationStateChange={handleNavigationStateChange}
-          onLoadStart={(event) => {
+          onLoadStart={() => {
             setIsLoading(true);
             setLoadError(null);
-            if (event.nativeEvent.url !== currentUrl) {
-              clearDetectedVideos();
-            }
           }}
           onLoadProgress={handleLoadProgress}
           onLoadEnd={() => {

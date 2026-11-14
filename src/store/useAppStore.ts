@@ -104,6 +104,7 @@ interface AppStoreState {
   setCurrentUrl: (url: string) => void;
   toggleDesktopMode: () => void;
   setDetectedVideos: (videos: DetectedVideo[]) => void;
+  mergeDetectedVideos: (videos: DetectedVideo[]) => void;
   clearDetectedVideos: () => void;
   openAddressInput: (rawInput: string) => {
     targetUrl: string;
@@ -127,8 +128,8 @@ interface AppStoreState {
 
 export const useAppStore = create<AppStoreState>((set, get) => ({
   themeMode: 'system',
-  currentUrl: 'https://www.w3schools.com/html/html5_video.asp',
-  pageTitle: 'HTML5 Video Demo',
+  currentUrl: 'https://www.google.com',
+  pageTitle: 'Google Search',
   isDesktopMode: false,
   webViewSessionKey: 1,
   isAddressResolving: false,
@@ -147,6 +148,21 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((state) => ({ isDesktopMode: !state.isDesktopMode })),
 
   setDetectedVideos: (videos) => set({ detectedVideos: videos }),
+
+  mergeDetectedVideos: (videos) =>
+    set((state) => {
+      if (videos.length === 0) {
+        return state;
+      }
+      const seen = new Set(state.detectedVideos.map((v) => v.url));
+      const additions = videos.filter((v) => !seen.has(v.url));
+      if (additions.length === 0) {
+        return state;
+      }
+      return {
+        detectedVideos: [...state.detectedVideos, ...additions],
+      };
+    }),
 
   clearDetectedVideos: () => set({ detectedVideos: [] }),
 
@@ -217,6 +233,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   clearBrowserSessionData: () =>
     set((state) => ({
+      currentUrl: 'https://www.google.com',
+      pageTitle: 'Google Search',
       recentSites: [],
       detectedVideos: [],
       webViewSessionKey: state.webViewSessionKey + 1,

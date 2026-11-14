@@ -12,6 +12,13 @@ export interface NativeStartDownloadResult {
   relativePath: string;
 }
 
+export interface NativeExtractedEmbedVideo {
+  url: string;
+  title: string;
+  extension: 'mp4' | 'webm';
+  mimeType: string;
+}
+
 export interface NativeDownloadProgressEvent {
   downloadId: string;
   status: DownloadStatus;
@@ -30,6 +37,11 @@ interface BdmDownloadNativeInterface {
     mimeType: string,
     userAgent: string | null,
   ): Promise<NativeStartDownloadResult>;
+  extractVideosFromEmbedUrl(
+    embedUrl: string,
+    refererUrl: string | null,
+    userAgent: string | null,
+  ): Promise<NativeExtractedEmbedVideo[]>;
   queryDownload(downloadId: string): Promise<NativeDownloadProgressEvent>;
   cancelDownload(downloadId: string): Promise<boolean>;
   removeDownloadedFile(downloadId: string): Promise<boolean>;
