@@ -22,8 +22,8 @@ const INITIAL_QUICK_ACCESS: QuickAccessSite[] = [
   {
     id: 'qa-9anime',
     title: '9anime.si',
-    subtitle: 'black-clover-season-2-episode-6',
-    url: 'https://9anime.si/watch/black-clover-season-2-episode-6',
+    subtitle: 'Anime Streaming Portal',
+    url: 'https://9anime.si',
     category: 'video',
     accentColor: '#4F46E5',
   },
@@ -43,6 +43,8 @@ const INITIAL_RECENT_SITES: RecentSite[] = [
 interface AppStoreState {
   themeMode: ThemeMode;
   currentUrl: string;
+  navigationTargetUrl: string;
+  navigationVersion: number;
   pageTitle: string;
   isDesktopMode: boolean;
   webViewSessionKey: number;
@@ -81,6 +83,8 @@ interface AppStoreState {
 export const useAppStore = create<AppStoreState>((set, get) => ({
   themeMode: 'system',
   currentUrl: 'https://www.google.com',
+  navigationTargetUrl: 'https://www.google.com',
+  navigationVersion: 1,
   pageTitle: 'Google Search',
   isDesktopMode: false,
   webViewSessionKey: 1,
@@ -172,6 +176,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       );
       return {
         currentUrl: resolved.targetUrl,
+        navigationTargetUrl: resolved.targetUrl,
+        navigationVersion: state.navigationVersion + 1,
         pageTitle: resolved.displayTitle,
         detectedVideos: [],
         recentSites: [newRecent, ...filtered].slice(0, 15),
@@ -223,6 +229,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   clearBrowserSessionData: () =>
     set((state) => ({
       currentUrl: 'https://www.google.com',
+      navigationTargetUrl: 'https://www.google.com',
+      navigationVersion: state.navigationVersion + 1,
       pageTitle: 'Google Search',
       recentSites: [],
       detectedVideos: [],

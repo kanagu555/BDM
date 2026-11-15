@@ -75,6 +75,8 @@ export const BrowserScreen: React.FC = () => {
   const webViewRef = useRef<WebView>(null);
 
   const currentUrl = useAppStore((state) => state.currentUrl);
+  const navigationTargetUrl = useAppStore((state) => state.navigationTargetUrl);
+  const navigationVersion = useAppStore((state) => state.navigationVersion);
   const pageTitle = useAppStore((state) => state.pageTitle);
   const isDesktopMode = useAppStore((state) => state.isDesktopMode);
   const webViewSessionKey = useAppStore((state) => state.webViewSessionKey);
@@ -102,21 +104,21 @@ export const BrowserScreen: React.FC = () => {
   const [isDownloadSheetVisible, setIsDownloadSheetVisible] = useState(false);
   const [queuedNotice, setQueuedNotice] = useState<string | null>(null);
 
-  // Sync route initialUrl if navigated from HomeScreen
+  // Sync route initialUrl only once when explicitly passed via route params
   useEffect(() => {
     const incomingUrl = route.params?.initialUrl;
-    if (incomingUrl && incomingUrl !== currentUrl) {
-      clearDetectedVideos();
-      setCurrentUrl(incomingUrl);
-      setAddressBarText(incomingUrl);
+    if (incomingUrl) {
+      openAddressInput(incomingUrl);
+      navigation.setParams({ initialUrl: undefined });
       setLoadError(null);
     }
-  }, [
-    route.params?.initialUrl,
-    currentUrl,
-    setCurrentUrl,
-    clearDetectedVideos,
-  ]);
+  }, [route.params?.initialUrl, openAddressInput, navigation]);
+
+  // Clear any previous load error when user initiates a new address navigation
+  useEffect(() => {
+    setLoadError(null);
+    setShowSecurityBanner(false);
+  }, [navigationVersion]);
 
   // Keep address bar text synced when currentUrl updates externally
   useEffect(() => {
@@ -233,8 +235,12 @@ export const BrowserScreen: React.FC = () => {
       navState.url !== 'about:blank' &&
       /^https?:\/\//i.test(navState.url)
     ) {
-      if (navState.url !== currentUrl) {
+      const normalizeUrl = (u: string) =>
+        u.trim().replace(/\/+$/, '').toLowerCase();
+      if (normalizeUrl(navState.url) !== normalizeUrl(currentUrl)) {
         clearDetectedVideos();
+        setCurrentUrl(navState.url);
+      } else if (navState.url !== currentUrl) {
         setCurrentUrl(navState.url);
       }
       if (!isEditingAddress) {
@@ -604,9 +610,9 @@ export const BrowserScreen: React.FC = () => {
       {/* Main Content: WebView, Floating Download Button & Error Overlay */}
       <View style={styles.webViewContainer}>
         <WebView
-          key={`bdm-webview-${webViewSessionKey}-${isDesktopMode ? 'desktop' : 'mobile'}`}
+          key={`bdm-webview-${webViewSessionKey}-${navigationVersion}-${isDesktopMode ? 'desktop' : 'mobile'}`}
           ref={webViewRef}
-          source={{ uri: currentUrl }}
+          source={{ uri: navigationTargetUrl }}
           userAgent={BrowserService.getUserAgent(isDesktopMode)}
           injectedJavaScript={VideoDetectionService.getInjectionScript()}
           onMessage={handleWebViewMessage}

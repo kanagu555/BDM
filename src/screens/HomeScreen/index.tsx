@@ -69,7 +69,7 @@ export const HomeScreen: React.FC = () => {
       setIsAddressResolving(false);
       setLoadingTarget(null);
       setAddressInput('');
-      navigation.navigate('Browser', { initialUrl: resolved.targetUrl });
+      navigation.navigate('Browser');
     }, 320);
   };
 
