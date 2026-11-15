@@ -41,6 +41,7 @@ const INITIAL_RECENT_SITES: RecentSite[] = [
 ];
 
 interface AppStoreState {
+  isHydrated: boolean;
   themeMode: ThemeMode;
   currentUrl: string;
   navigationTargetUrl: string;
@@ -53,6 +54,7 @@ interface AppStoreState {
   recentSites: RecentSite[];
   detectedVideos: DetectedVideo[];
   downloads: DownloadItem[];
+  hydrateStore: () => Promise<void>;
   setThemeMode: (mode: ThemeMode) => void;
   setIsAddressResolving: (loading: boolean) => void;
   setCurrentUrl: (url: string) => void;
@@ -75,12 +77,27 @@ interface AppStoreState {
   applyNativeDownloadProgress: (event: NativeDownloadProgressEvent) => void;
   cancelDownloadById: (id: string) => Promise<void>;
   deleteDownloadById: (id: string) => Promise<void>;
+  clearDownloadsList: () => void;
   openDownloadedVideo: (id: string) => Promise<void>;
   shareDownloadedVideo: (id: string) => Promise<void>;
   retryDownloadById: (id: string) => Promise<void>;
 }
 
+interface PersistedAppState {
+  themeMode?: ThemeMode;
+  downloads?: DownloadItem[];
+}
+
+function persistAppState(themeMode: ThemeMode, downloads: DownloadItem[]) {
+  const payload: PersistedAppState = {
+    themeMode,
+    downloads,
+  };
+  DownloadService.savePersistedState(JSON.stringify(payload)).catch(() => {});
+}
+
 export const useAppStore = create<AppStoreState>((set, get) => ({
+  isHydrated: false,
   themeMode: 'system',
   currentUrl: 'https://www.google.com',
   navigationTargetUrl: 'https://www.google.com',
@@ -94,7 +111,60 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   detectedVideos: [],
   downloads: [],
 
-  setThemeMode: (mode) => set({ themeMode: mode }),
+  hydrateStore: async () => {
+    if (get().isHydrated) {
+      return;
+    }
+    try {
+      const rawJson = await DownloadService.loadPersistedState();
+      if (!rawJson) {
+        set({ isHydrated: true });
+        return;
+      }
+      const parsed = JSON.parse(rawJson) as PersistedAppState;
+      const validTheme =
+        parsed.themeMode === 'light' ||
+        parsed.themeMode === 'dark' ||
+        parsed.themeMode === 'system'
+          ? parsed.themeMode
+          : get().themeMode;
+
+      const restoredDownloads = Array.isArray(parsed.downloads)
+        ? parsed.downloads.map((item): DownloadItem => {
+            if (item.status === 'downloading' || item.status === 'pending') {
+              return {
+                ...item,
+                status: 'failed',
+                errorMessage:
+                  'Download interrupted when app closed. Tap Retry to restart.',
+              };
+            }
+            return item;
+          })
+        : [];
+
+      set((state) => {
+        // Merge any downloads started before hydration completed
+        const existingIds = new Set(state.downloads.map((d) => d.id));
+        const merged = [
+          ...state.downloads,
+          ...restoredDownloads.filter((d) => !existingIds.has(d.id)),
+        ];
+        return {
+          isHydrated: true,
+          themeMode: validTheme,
+          downloads: merged,
+        };
+      });
+    } catch {
+      set({ isHydrated: true });
+    }
+  },
+
+  setThemeMode: (mode) => {
+    set({ themeMode: mode });
+    persistAppState(mode, get().downloads);
+  },
 
   setIsAddressResolving: (loading) => set({ isAddressResolving: loading }),
 
@@ -263,44 +333,60 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       createdAt: Date.now(),
     };
 
-    set((state) => ({
-      downloads: [newItem, ...state.downloads],
-    }));
+    set((state) => {
+      const updated = [newItem, ...state.downloads];
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
+      };
+    });
 
     return newItem;
   },
 
   applyNativeDownloadProgress: (event: NativeDownloadProgressEvent) => {
     set((state) => {
-      const exists = state.downloads.some(
+      const target = state.downloads.find(
         (item) => item.downloadManagerId === event.downloadId,
       );
-      if (!exists) {
+      if (!target) {
         return state;
       }
 
+      const prevStatus = target.status;
+      const updatedDownloads = state.downloads.map((item) => {
+        if (item.downloadManagerId !== event.downloadId) {
+          return item;
+        }
+        return {
+          ...item,
+          status: event.status,
+          downloadedBytes:
+            event.bytesDownloaded > 0
+              ? event.bytesDownloaded
+              : item.downloadedBytes,
+          fileSize:
+            event.totalBytes > 0 ? event.totalBytes : item.fileSize,
+          progress:
+            event.status === 'completed'
+              ? 100
+              : Math.round(event.progress * 10) / 10,
+          localUri: event.localUri || item.localUri,
+          errorMessage: event.errorMessage || item.errorMessage,
+        };
+      });
+
+      if (
+        prevStatus !== event.status ||
+        event.status === 'completed' ||
+        event.status === 'failed' ||
+        event.status === 'cancelled'
+      ) {
+        persistAppState(state.themeMode, updatedDownloads);
+      }
+
       return {
-        downloads: state.downloads.map((item) => {
-          if (item.downloadManagerId !== event.downloadId) {
-            return item;
-          }
-          return {
-            ...item,
-            status: event.status,
-            downloadedBytes:
-              event.bytesDownloaded > 0
-                ? event.bytesDownloaded
-                : item.downloadedBytes,
-            fileSize:
-              event.totalBytes > 0 ? event.totalBytes : item.fileSize,
-            progress:
-              event.status === 'completed'
-                ? 100
-                : Math.round(event.progress * 10) / 10,
-            localUri: event.localUri || item.localUri,
-            errorMessage: event.errorMessage || item.errorMessage,
-          };
-        }),
+        downloads: updatedDownloads,
       };
     });
   },
@@ -315,25 +401,53 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     } catch {
       // Ignore if already removed by OS
     }
-    set((state) => ({
-      downloads: state.downloads.map((d) =>
-        d.id === id ? { ...d, status: 'cancelled', progress: 0 } : d,
-      ),
-    }));
+    set((state) => {
+      const updated = state.downloads.map((d) =>
+        d.id === id
+          ? { ...d, status: 'cancelled' as const, progress: 0 }
+          : d,
+      );
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
+      };
+    });
   },
 
   deleteDownloadById: async (id: string) => {
     const target = get().downloads.find((d) => d.id === id);
     if (target) {
       try {
-        await DownloadService.removeDownloadedFile(target.downloadManagerId);
+        await DownloadService.removeDownloadedFile(
+          target.downloadManagerId,
+          target.localUri,
+          target.fileName,
+        );
       } catch {
         // Ignore if file already deleted
       }
     }
-    set((state) => ({
-      downloads: state.downloads.filter((d) => d.id !== id),
-    }));
+    set((state) => {
+      const updated = state.downloads.filter((d) => d.id !== id);
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
+      };
+    });
+  },
+
+  clearDownloadsList: () => {
+    set((state) => {
+      // Keep only actively downloading items so running background tasks aren't orphaned;
+      // clear all completed, failed, and cancelled items from the list (files stay on disk).
+      const activeOnly = state.downloads.filter(
+        (d) => d.status === 'downloading' || d.status === 'pending',
+      );
+      persistAppState(state.themeMode, activeOnly);
+      return {
+        downloads: activeOnly,
+      };
+    });
   },
 
   openDownloadedVideo: async (id: string) => {
@@ -344,6 +458,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     await DownloadService.openDownloadedFile(
       target.downloadManagerId,
       target.mimeType,
+      target.localUri,
+      target.fileName,
     );
   },
 
@@ -356,6 +472,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       target.downloadManagerId,
       target.mimeType,
       target.title,
+      target.localUri,
+      target.fileName,
     );
   },
 
@@ -373,21 +491,25 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       userAgent: BrowserService.getUserAgent(isDesktop),
     });
 
-    set((state) => ({
-      downloads: state.downloads.map((d) =>
+    set((state) => {
+      const updated = state.downloads.map((d) =>
         d.id === id
           ? {
-            ...d,
-            downloadManagerId: nativeRes.downloadId,
-            fileName: nativeRes.fileName,
-            relativePath: nativeRes.relativePath,
-            status: 'downloading',
-            progress: 0,
-            downloadedBytes: 0,
-            errorMessage: undefined,
-          }
+              ...d,
+              downloadManagerId: nativeRes.downloadId,
+              fileName: nativeRes.fileName,
+              relativePath: nativeRes.relativePath,
+              status: 'downloading' as const,
+              progress: 0,
+              downloadedBytes: 0,
+              errorMessage: undefined,
+            }
           : d,
-      ),
-    }));
+      );
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
+      };
+    });
   },
 }));

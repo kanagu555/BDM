@@ -108,27 +108,44 @@ export const DownloadService = {
     return NativeBdmDownloadModule.cancelDownload(downloadId);
   },
 
-  async removeDownloadedFile(downloadId: string): Promise<boolean> {
+  async removeDownloadedFile(
+    downloadId: string,
+    localUri?: string,
+    fileName?: string,
+  ): Promise<boolean> {
     if (!NativeBdmDownloadModule) {
       return false;
     }
-    return NativeBdmDownloadModule.removeDownloadedFile(downloadId);
+    return NativeBdmDownloadModule.removeDownloadedFile(
+      downloadId,
+      localUri ?? null,
+      fileName ?? null,
+    );
   },
 
   async openDownloadedFile(
     downloadId: string,
     mimeType: string,
+    localUri?: string,
+    fileName?: string,
   ): Promise<boolean> {
     if (!NativeBdmDownloadModule) {
       throw new Error('Android DownloadManager native module is unavailable.');
     }
-    return NativeBdmDownloadModule.openDownloadedFile(downloadId, mimeType);
+    return NativeBdmDownloadModule.openDownloadedFile(
+      downloadId,
+      mimeType,
+      localUri ?? null,
+      fileName ?? null,
+    );
   },
 
   async shareDownloadedFile(
     downloadId: string,
     mimeType: string,
     title: string,
+    localUri?: string,
+    fileName?: string,
   ): Promise<boolean> {
     if (!NativeBdmDownloadModule) {
       throw new Error('Android DownloadManager native module is unavailable.');
@@ -137,7 +154,31 @@ export const DownloadService = {
       downloadId,
       mimeType,
       title,
+      localUri ?? null,
+      fileName ?? null,
     );
+  },
+
+  async loadPersistedState(): Promise<string | null> {
+    if (!NativeBdmDownloadModule) {
+      return null;
+    }
+    try {
+      return await NativeBdmDownloadModule.loadPersistedState();
+    } catch {
+      return null;
+    }
+  },
+
+  async savePersistedState(stateJson: string): Promise<boolean> {
+    if (!NativeBdmDownloadModule) {
+      return false;
+    }
+    try {
+      return await NativeBdmDownloadModule.savePersistedState(stateJson);
+    } catch {
+      return false;
+    }
   },
 
   subscribeProgress(

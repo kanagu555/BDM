@@ -9,9 +9,14 @@ import { useAppStore } from './src/store/useAppStore';
 
 function ThemedRoot(): React.JSX.Element {
   const { colors } = useAppTheme();
+  const hydrateStore = useAppStore((state) => state.hydrateStore);
   const applyNativeDownloadProgress = useAppStore(
     (state) => state.applyNativeDownloadProgress,
   );
+
+  useEffect(() => {
+    hydrateStore().catch(() => {});
+  }, [hydrateStore]);
 
   useEffect(() => {
     const unsubscribe = DownloadService.subscribeProgress((event) => {

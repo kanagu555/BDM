@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Download vertical shaft -->
+    <path
+        android:pathData="M54,31L54,59"
+        android:strokeWidth="6.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Download arrowhead -->
+    <path
+        android:pathData="M42,48L54,60L66,48"
+        android:strokeWidth="6.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Download base tray bar -->
+    <path
+        android:pathData="M39,71L69,71"
+        android:strokeWidth="6.5"
+        android:strokeColor="#00C2FF"
+        android:strokeLineCap="round" />
+    <!-- Cyber Cyan active detection dot -->
+    <path
+        android:pathData="M71,34m-5.5,0a5.5,5.5 0,1 1,11 0a5.5,5.5 0,1 1,-11 0"
+        android:fillColor="#00C2FF" />
+</vector>

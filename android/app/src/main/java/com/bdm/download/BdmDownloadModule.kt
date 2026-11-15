@@ -41,6 +41,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     const val EVENT_DOWNLOAD_PROGRESS = "BDM_DOWNLOAD_PROGRESS"
     private const val NOTIFICATION_CHANNEL_ID = "bdm_downloads_channel"
     private const val NOTIFICATION_CHANNEL_NAME = "BDM Video Downloads"
+    private const val PREFS_NAME = "bdm_persistent_store"
+    private const val PREF_KEY_APP_STATE = "app_state_json"
   }
 
   private data class ProbedStreamInfo(
@@ -1100,7 +1102,126 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun removeDownloadedFile(downloadIdStr: String, promise: Promise) {
+  fun loadPersistedState(promise: Promise) {
+    try {
+      val prefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      val stateJson = prefs.getString(PREF_KEY_APP_STATE, null)
+      promise.resolve(stateJson)
+    } catch (e: Exception) {
+      promise.resolve(null)
+    }
+  }
+
+  @ReactMethod
+  fun savePersistedState(stateJson: String, promise: Promise) {
+    try {
+      val prefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      prefs.edit().putString(PREF_KEY_APP_STATE, stateJson).apply()
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  private fun findMediaStoreOrDiskUriByFileName(fileNameHint: String?): Uri? {
+    if (fileNameHint.isNullOrBlank()) {
+      return null
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      var cursor: Cursor? = null
+      try {
+        val projection = arrayOf(MediaStore.MediaColumns._ID)
+        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf(fileNameHint)
+        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+        cursor =
+            reactContext.contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                sortOrder
+            )
+        if (cursor != null && cursor.moveToFirst()) {
+          val idIdx = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
+          if (idIdx >= 0) {
+            val mediaId = cursor.getLong(idIdx)
+            return Uri.withAppendedPath(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                mediaId.toString()
+            )
+          }
+        }
+      } catch (_: Exception) {} finally {
+        cursor?.close()
+      }
+    }
+
+    try {
+      val downloadsRoot =
+          Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+      val candidateFile = File(File(downloadsRoot, "BDM"), fileNameHint)
+      if (candidateFile.exists()) {
+        return Uri.fromFile(candidateFile)
+      }
+    } catch (_: Exception) {}
+    return null
+  }
+
+  private fun resolvePlayableContentUri(
+      downloadIdStr: String,
+      localUriHint: String?,
+      fileNameHint: String?
+  ): Uri? {
+    val customTask = customTasks[downloadIdStr]
+    if (customTask != null) {
+      if (customTask.contentUri != null) {
+        return customTask.contentUri
+      }
+      val destFile = customTask.destFile
+      if (destFile != null && destFile.exists()) {
+        return Uri.fromFile(destFile)
+      }
+    }
+
+    if (!localUriHint.isNullOrBlank()) {
+      try {
+        val parsed = Uri.parse(localUriHint)
+        val scheme = parsed.scheme?.lowercase()
+        if (scheme == "content") {
+          return parsed
+        } else if (scheme == "file") {
+          val path = parsed.path
+          if (!path.isNullOrBlank() && File(path).exists()) {
+            return parsed
+          }
+        }
+      } catch (_: Exception) {}
+    }
+
+    val byFileName = findMediaStoreOrDiskUriByFileName(fileNameHint)
+    if (byFileName != null) {
+      return byFileName
+    }
+
+    val dmId = downloadIdStr.toLongOrNull()
+    if (dmId != null) {
+      return try {
+        downloadManager.getUriForDownloadedFile(dmId)
+      } catch (_: Exception) {
+        null
+      }
+    }
+    return null
+  }
+
+  @ReactMethod
+  fun removeDownloadedFile(
+      downloadIdStr: String,
+      localUriHint: String?,
+      fileNameHint: String?,
+      promise: Promise
+  ) {
     try {
       val customTask = customTasks.remove(downloadIdStr)
       if (customTask != null) {
@@ -1114,11 +1235,25 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         return
       }
 
+      val resolvedUri = resolvePlayableContentUri(downloadIdStr, localUriHint, fileNameHint)
+      if (resolvedUri != null) {
+        try {
+          if (resolvedUri.scheme?.lowercase() == "content") {
+            reactContext.contentResolver.delete(resolvedUri, null, null)
+          } else if (resolvedUri.scheme?.lowercase() == "file") {
+            val path = resolvedUri.path
+            if (!path.isNullOrBlank()) {
+              File(path).delete()
+            }
+          }
+        } catch (_: Exception) {}
+      }
+
       val dmId = downloadIdStr.toLongOrNull()
       if (dmId != null) {
-        val removedCount = downloadManager.remove(dmId)
-        promise.resolve(removedCount > 0)
-        return
+        try {
+          downloadManager.remove(dmId)
+        } catch (_: Exception) {}
       }
       promise.resolve(true)
     } catch (e: Exception) {
@@ -1126,32 +1261,16 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  private fun resolvePlayableContentUri(downloadIdStr: String): Uri? {
-    val customTask = customTasks[downloadIdStr]
-    if (customTask != null) {
-      if (customTask.contentUri != null) {
-        return customTask.contentUri
-      }
-      val destFile = customTask.destFile
-      if (destFile != null && destFile.exists()) {
-        return Uri.fromFile(destFile)
-      }
-    }
-    val dmId = downloadIdStr.toLongOrNull()
-    if (dmId != null) {
-      return try {
-        downloadManager.getUriForDownloadedFile(dmId)
-      } catch (_: Exception) {
-        null
-      }
-    }
-    return null
-  }
-
   @ReactMethod
-  fun openDownloadedFile(downloadIdStr: String, mimeType: String, promise: Promise) {
+  fun openDownloadedFile(
+      downloadIdStr: String,
+      mimeType: String,
+      localUriHint: String?,
+      fileNameHint: String?,
+      promise: Promise
+  ) {
     try {
-      val contentUri = resolvePlayableContentUri(downloadIdStr)
+      val contentUri = resolvePlayableContentUri(downloadIdStr, localUriHint, fileNameHint)
       if (contentUri == null) {
         promise.reject(
             "FILE_NOT_FOUND",
@@ -1184,10 +1303,12 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       downloadIdStr: String,
       mimeType: String,
       title: String,
+      localUriHint: String?,
+      fileNameHint: String?,
       promise: Promise
   ) {
     try {
-      val contentUri = resolvePlayableContentUri(downloadIdStr)
+      val contentUri = resolvePlayableContentUri(downloadIdStr, localUriHint, fileNameHint)
       if (contentUri == null) {
         promise.reject(
             "FILE_NOT_FOUND",

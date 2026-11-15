@@ -50,6 +50,7 @@ export const DownloadsScreen: React.FC = () => {
   const downloads = useAppStore((state) => state.downloads);
   const cancelDownloadById = useAppStore((state) => state.cancelDownloadById);
   const deleteDownloadById = useAppStore((state) => state.deleteDownloadById);
+  const clearDownloadsList = useAppStore((state) => state.clearDownloadsList);
   const openDownloadedVideo = useAppStore((state) => state.openDownloadedVideo);
   const shareDownloadedVideo = useAppStore(
     (state) => state.shareDownloadedVideo,
@@ -60,6 +61,7 @@ export const DownloadsScreen: React.FC = () => {
   const [menuTargetItem, setMenuTargetItem] = useState<DownloadItem | null>(
     null,
   );
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
 
   const activeDownloads = useMemo(
@@ -110,6 +112,12 @@ export const DownloadsScreen: React.FC = () => {
     setMenuTargetItem(null);
     await deleteDownloadById(item.id);
     showFeedback(`Deleted "${item.fileName}"`);
+  };
+
+  const handleConfirmClearList = () => {
+    setShowClearConfirm(false);
+    clearDownloadsList();
+    showFeedback('Cleared download list. Saved video files remain on your device.');
   };
 
   const handleRetryDownload = async (item: DownloadItem) => {
@@ -359,7 +367,7 @@ export const DownloadsScreen: React.FC = () => {
       style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Top Header */}
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerTitleCol}>
           <Text style={[styles.title, { color: colors.textPrimary }]}>
             Downloads
           </Text>
@@ -367,6 +375,25 @@ export const DownloadsScreen: React.FC = () => {
             Storage location: Internal Storage / Downloads / BDM
           </Text>
         </View>
+        {completedDownloads.length + failedDownloads.length > 0 ? (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Clear download list"
+            onPress={() => setShowClearConfirm(true)}
+            style={[
+              styles.clearListButton,
+              {
+                backgroundColor: `${colors.error}14`,
+                borderColor: `${colors.error}35`,
+              },
+            ]}>
+            <TrashIcon size={14} color={colors.error} />
+            <Text style={[styles.clearListButtonText, { color: colors.error }]}>
+              Clear List
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* Filter Tabs: All, Active, Completed, Failed */}
@@ -653,6 +680,70 @@ export const DownloadsScreen: React.FC = () => {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Clear Download List Confirmation Modal */}
+      <Modal
+        visible={showClearConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowClearConfirm(false)}>
+        <Pressable
+          style={styles.dialogBackdrop}
+          onPress={() => setShowClearConfirm(false)}>
+          <Pressable
+            style={[
+              styles.dialogCard,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}>
+            <View
+              style={[
+                styles.dialogIconCircle,
+                { backgroundColor: `${colors.error}18` },
+              ]}>
+              <TrashIcon size={22} color={colors.error} />
+            </View>
+            <Text style={[styles.dialogTitle, { color: colors.textPrimary }]}>
+              Clear Download List?
+            </Text>
+            <Text
+              style={[styles.dialogDescription, { color: colors.textSecondary }]}>
+              This removes completed and failed entries from your BDM history list. Your downloaded video files in Internal Storage / Downloads / BDM will remain safely saved on your device.
+            </Text>
+            <View style={styles.dialogActionsRow}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setShowClearConfirm(false)}
+                style={[
+                  styles.dialogCancelBtn,
+                  {
+                    backgroundColor: colors.surfaceElevated,
+                    borderColor: colors.border,
+                  },
+                ]}>
+                <Text
+                  style={[
+                    styles.dialogCancelBtnText,
+                    { color: colors.textPrimary },
+                  ]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={handleConfirmClearList}
+                style={[
+                  styles.dialogConfirmBtn,
+                  { backgroundColor: colors.error },
+                ]}>
+                <Text style={styles.dialogConfirmBtnText}>Clear List</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -663,8 +754,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
     paddingTop: Spacing.md,
     paddingBottom: Spacing.sm,
+  },
+  headerTitleCol: {
+    flex: 1,
+  },
+  clearListButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+  },
+  clearListButtonText: {
+    ...Typography.caption,
+    fontWeight: '700',
+    fontSize: 12,
   },
   title: {
     ...Typography.h1,
@@ -899,5 +1011,72 @@ const styles = StyleSheet.create({
   sheetOptionText: {
     ...Typography.subtitle,
     fontSize: 14,
+  },
+  dialogBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  dialogCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  dialogIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  dialogTitle: {
+    ...Typography.h2,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  dialogDescription: {
+    ...Typography.body,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: Spacing.xs,
+  },
+  dialogActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    width: '100%',
+    marginTop: Spacing.xs,
+  },
+  dialogCancelBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dialogCancelBtnText: {
+    ...Typography.subtitle,
+    fontSize: 14,
+  },
+  dialogConfirmBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dialogConfirmBtnText: {
+    ...Typography.subtitle,
+    fontSize: 14,
+    color: '#FFFFFF',
   },
 });

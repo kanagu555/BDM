@@ -52,13 +52,26 @@ interface BdmDownloadNativeInterface {
   ): Promise<NativeExtractedEmbedVideo | null>;
   queryDownload(downloadId: string): Promise<NativeDownloadProgressEvent>;
   cancelDownload(downloadId: string): Promise<boolean>;
-  removeDownloadedFile(downloadId: string): Promise<boolean>;
-  openDownloadedFile(downloadId: string, mimeType: string): Promise<boolean>;
+  removeDownloadedFile(
+    downloadId: string,
+    localUri: string | null,
+    fileName: string | null,
+  ): Promise<boolean>;
+  openDownloadedFile(
+    downloadId: string,
+    mimeType: string,
+    localUri: string | null,
+    fileName: string | null,
+  ): Promise<boolean>;
   shareDownloadedFile(
     downloadId: string,
     mimeType: string,
     title: string,
+    localUri: string | null,
+    fileName: string | null,
   ): Promise<boolean>;
+  loadPersistedState(): Promise<string | null>;
+  savePersistedState(stateJson: string): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
