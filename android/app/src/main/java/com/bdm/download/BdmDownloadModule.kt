@@ -8,11 +8,17 @@ import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.graphics.BitmapFactory
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.view.View
+import android.view.ViewGroup
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.bdm.R
@@ -24,15 +30,21 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.reactnativecommunity.webview.RNCWebView
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import org.json.JSONArray
 
 class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
@@ -41,6 +53,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "BdmDownloadModule"
     const val EVENT_DOWNLOAD_PROGRESS = "BDM_DOWNLOAD_PROGRESS"
+    const val EVENT_STREAM_DETECTED = "BDM_STREAM_DETECTED"
     private const val NOTIFICATION_CHANNEL_ID = "bdm_downloads_channel"
     private const val NOTIFICATION_CHANNEL_NAME = "BDM Video Downloads"
     private const val PREFS_NAME = "bdm_persistent_store"
@@ -51,7 +64,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       val finalUrl: String,
       val fileSize: Long,
       val mimeType: String,
-      val extension: String
+      val extension: String,
+      val isValidMedia: Boolean = true
   )
 
   private class CustomDownloadTask(
@@ -83,6 +97,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private val customTasks = ConcurrentHashMap<String, CustomDownloadTask>()
+  private val sniffedHeadersByUrl = ConcurrentHashMap<String, Map<String, String>>()
+  private val sniffedUrlLastSeen = ConcurrentHashMap<String, Long>()
   private val nextCustomDownloadId = AtomicLong(System.currentTimeMillis())
   private val downloadExecutor = Executors.newCachedThreadPool()
   private val probeExecutor = Executors.newCachedThreadPool()
@@ -291,7 +307,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       refererUrl: String?,
       userAgent: String?,
       isProbeOnly: Boolean,
-      rangeStartByte: Long = 0L
+      rangeStartByte: Long = 0L,
+      extraHeaders: Map<String, String>? = null
   ): Pair<HttpURLConnection, String> {
     var currentUrl = initialUrl
     var currentReferer = refererUrl
@@ -307,17 +324,33 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
             setRequestProperty("Accept", "*/*")
             setRequestProperty("Accept-Encoding", "identity")
             setRequestProperty("Connection", "keep-alive")
-            if (!userAgent.isNullOrBlank()) {
-              setRequestProperty("User-Agent", userAgent)
+            val headerUa =
+                extraHeaders?.entries?.firstOrNull { it.key.equals("User-Agent", true) }?.value
+            val resolvedUa = if (!userAgent.isNullOrBlank()) userAgent else headerUa
+            if (!resolvedUa.isNullOrBlank()) {
+              setRequestProperty("User-Agent", resolvedUa)
             }
-            if (!currentReferer.isNullOrBlank()) {
-              setRequestProperty("Referer", currentReferer)
+            val headerRef =
+                extraHeaders?.entries?.firstOrNull { it.key.equals("Referer", true) }?.value
+            val resolvedRef = if (!currentReferer.isNullOrBlank()) currentReferer else headerRef
+            if (!resolvedRef.isNullOrBlank()) {
+              setRequestProperty("Referer", resolvedRef)
             } else {
               try {
                 val parsed = Uri.parse(currentUrl)
                 val origin = "${parsed.scheme}://${parsed.host}/"
                 setRequestProperty("Referer", origin)
               } catch (_: Exception) {}
+            }
+            val headerOrigin =
+                extraHeaders?.entries?.firstOrNull { it.key.equals("Origin", true) }?.value
+            if (!headerOrigin.isNullOrBlank()) {
+              setRequestProperty("Origin", headerOrigin)
+            }
+            val headerCookie =
+                extraHeaders?.entries?.firstOrNull { it.key.equals("Cookie", true) }?.value
+            if (!headerCookie.isNullOrBlank()) {
+              setRequestProperty("Cookie", headerCookie)
             }
             if (isProbeOnly) {
               setRequestProperty("Range", "bytes=0-0")
@@ -373,6 +406,23 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       if (code in 200..299) {
         val totalBytes = parseTotalBytesFromHeaders(conn)
         val rawContentType = (conn.contentType ?: "").lowercase()
+        val isNonVideoContent =
+            rawContentType.contains("text/html") ||
+                rawContentType.contains("application/xhtml") ||
+                rawContentType.contains("application/json") ||
+                rawContentType.contains("text/plain") ||
+                rawContentType.contains("javascript") ||
+                rawContentType.contains("text/css") ||
+                rawContentType.contains("image/")
+        if (isNonVideoContent) {
+          return ProbedStreamInfo(
+              finalUrl = finalUrl,
+              fileSize = 0L,
+              mimeType = defaultMime,
+              extension = defaultExt,
+              isValidMedia = false
+          )
+        }
         val ext =
             if (rawContentType.contains("webm") ||
                 finalUrl.substringBefore("?").endsWith(".webm", ignoreCase = true) ||
@@ -386,14 +436,16 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
             finalUrl = finalUrl,
             fileSize = totalBytes,
             mimeType = mime,
-            extension = ext
+            extension = ext,
+            isValidMedia = true
         )
       } else {
         ProbedStreamInfo(
             finalUrl = rawUrl,
             fileSize = 0L,
             mimeType = defaultMime,
-            extension = defaultExt
+            extension = defaultExt,
+            isValidMedia = false
         )
       }
     } catch (_: Exception) {
@@ -401,7 +453,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           finalUrl = rawUrl,
           fileSize = 0L,
           mimeType = defaultMime,
-          extension = defaultExt
+          extension = defaultExt,
+          isValidMedia = false
       )
     } finally {
       try {
@@ -434,6 +487,285 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       return urlQualityMatch.groupValues[1].lowercase()
     }
     return null
+  }
+
+  private fun findRncWebViews(root: View, out: MutableList<RNCWebView>) {
+    if (root is RNCWebView) {
+      out.add(root)
+    } else if (root is ViewGroup) {
+      for (i in 0 until root.childCount) {
+        findRncWebViews(root.getChildAt(i), out)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun attachWebViewSniffer(promise: Promise) {
+    val activity = reactContext.currentActivity
+    if (activity == null) {
+      promise.resolve(false)
+      return
+    }
+    activity.runOnUiThread {
+      try {
+        val views = ArrayList<RNCWebView>()
+        findRncWebViews(activity.window.decorView, views)
+        var attached = false
+        for (wv in views) {
+          val currentClient = wv.rncWebViewClient
+          if (currentClient !is BdmSniffingWebViewClient) {
+            wv.webViewClient =
+                BdmSniffingWebViewClient { sniffedUrl, headers ->
+                  onWebViewMediaSniffed(sniffedUrl, headers)
+                }
+            attached = true
+          } else {
+            attached = true
+          }
+        }
+        promise.resolve(attached)
+      } catch (_: Exception) {
+        promise.resolve(false)
+      }
+    }
+  }
+
+  private fun emitStreamDetected(videos: List<WritableMap>) {
+    if (videos.isEmpty() || !reactContext.hasActiveReactInstance()) return
+    try {
+      val arr = Arguments.createArray()
+      for (v in videos) {
+        arr.pushMap(v)
+      }
+      val payload = Arguments.createMap()
+      payload.putArray("videos", arr)
+      reactContext
+          .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit(EVENT_STREAM_DETECTED, payload)
+    } catch (_: Exception) {}
+  }
+
+  private fun fetchTextWithHeaders(url: String, headers: Map<String, String>): String? {
+    var conn: HttpURLConnection? = null
+    return try {
+      val (resolved, _) = openFollowRedirects(url, null, null, false, 0L, headers)
+      conn = resolved
+      if (conn.responseCode in 200..299) {
+        conn.inputStream.bufferedReader().use { it.readText() }
+      } else {
+        null
+      }
+    } catch (_: Exception) {
+      null
+    } finally {
+      try {
+        conn?.disconnect()
+      } catch (_: Exception) {}
+    }
+  }
+
+  private fun parseHlsPlaylistDurationAndFirstSegment(
+      playlistText: String,
+      baseUri: URI
+  ): Pair<Double, String?> {
+    var durationSum = 0.0
+    var firstSegmentUrl: String? = null
+    val lines = playlistText.lines()
+    for (rawLine in lines) {
+      val line = rawLine.trim()
+      if (line.startsWith("#EXTINF:", ignoreCase = true)) {
+        val durStr = line.substringAfter(":").substringBefore(",").trim()
+        val d = durStr.toDoubleOrNull()
+        if (d != null && d > 0.0) {
+          durationSum += d
+        }
+      } else if (line.isNotEmpty() && !line.startsWith("#")) {
+        if (firstSegmentUrl == null) {
+          firstSegmentUrl =
+              try {
+                baseUri.resolve(line).toString()
+              } catch (_: Exception) {
+                null
+              }
+        }
+      }
+    }
+    return Pair(durationSum, firstSegmentUrl)
+  }
+
+  private fun onWebViewMediaSniffed(url: String, headers: Map<String, String>) {
+    val now = System.currentTimeMillis()
+    val prevSeen = sniffedUrlLastSeen[url]
+    if (prevSeen != null && (now - prevSeen) < 15000L) {
+      return
+    }
+    sniffedUrlLastSeen[url] = now
+    sniffedHeadersByUrl[url] = headers
+
+    probeExecutor.execute {
+      try {
+        val lower = url.lowercase()
+        val isHls = lower.substringBefore("?").endsWith(".m3u8") || lower.contains(".m3u8?")
+        if (isHls) {
+          val playlistText = fetchTextWithHeaders(url, headers) ?: return@execute
+          if (!playlistText.contains("#EXTM3U", ignoreCase = true)) {
+            return@execute
+          }
+
+          val baseUri =
+              try {
+                URI(url)
+              } catch (_: Exception) {
+                return@execute
+              }
+
+          if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+            // Master playlist with multiple quality variants (1080p, 720p, 360p, etc.)
+            data class HlsVariant(
+                val variantUrl: String,
+                val bandwidth: Long,
+                val resolution: String?,
+                val qualityLabel: String?
+            )
+            val variants = ArrayList<HlsVariant>()
+            val lines = playlistText.lines()
+            var pendingAttrs: String? = null
+            for (rawLine in lines) {
+              val line = rawLine.trim()
+              if (line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+                pendingAttrs = line.substringAfter(":")
+              } else if (pendingAttrs != null && line.isNotEmpty() && !line.startsWith("#")) {
+                val resolvedVariant =
+                    try {
+                      baseUri.resolve(line).toString()
+                    } catch (_: Exception) {
+                      null
+                    }
+                if (resolvedVariant != null) {
+                  sniffedHeadersByUrl[resolvedVariant] = headers
+                  val bwMatch = Regex("""BANDWIDTH=(\d+)""").find(pendingAttrs)
+                  val bandwidth = bwMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                  val resMatch = Regex("""RESOLUTION=(\d+x\d+)""").find(pendingAttrs)
+                  val resolution = resMatch?.groupValues?.get(1)
+                  val height = resolution?.substringAfter("x")?.toIntOrNull()
+                  val qLabel =
+                      when {
+                        height != null && height >= 2160 -> "2160p"
+                        height != null && height >= 1440 -> "1440p"
+                        height != null && height >= 1080 -> "1080p"
+                        height != null && height >= 720 -> "720p"
+                        height != null && height >= 480 -> "480p"
+                        height != null && height >= 360 -> "360p"
+                        height != null && height >= 240 -> "240p"
+                        else -> extractQualityLabel(pendingAttrs, resolvedVariant)
+                      }
+                  variants.add(HlsVariant(resolvedVariant, bandwidth, resolution, qLabel))
+                }
+                pendingAttrs = null
+              }
+            }
+
+            if (variants.isEmpty()) return@execute
+
+            // Probe first variant playlist to get exact video duration
+            var durationSec = 0.0
+            try {
+              val firstMediaText = fetchTextWithHeaders(variants[0].variantUrl, headers)
+              if (firstMediaText != null) {
+                durationSec =
+                    parseHlsPlaylistDurationAndFirstSegment(
+                            firstMediaText,
+                            URI(variants[0].variantUrl)
+                        )
+                        .first
+              }
+            } catch (_: Exception) {}
+
+            val sortedVariants = variants.sortedByDescending { it.bandwidth }
+            val emittedList = ArrayList<WritableMap>()
+            for (v in sortedVariants) {
+              val estimatedSize =
+                  if (v.bandwidth > 0L && durationSec > 0.0) {
+                    ((v.bandwidth.toDouble() * durationSec) / 8.0).toLong()
+                  } else {
+                    0L
+                  }
+              val map = Arguments.createMap()
+              map.putString("url", v.variantUrl)
+              map.putString("originalUrl", url)
+              map.putString("extension", "mp4")
+              map.putString("mimeType", "application/x-mpegURL")
+              if (!v.qualityLabel.isNullOrBlank()) {
+                map.putString("quality", v.qualityLabel)
+              }
+              if (estimatedSize > 0L) {
+                map.putDouble("fileSize", estimatedSize.toDouble())
+              }
+              if (durationSec > 0.0) {
+                map.putDouble("durationSeconds", kotlin.math.round(durationSec))
+              }
+              emittedList.add(map)
+            }
+            emitStreamDetected(emittedList)
+          } else if (playlistText.contains("#EXTINF", ignoreCase = true)) {
+            // Single media playlist (e.g. index-f3.m3u8)
+            val (durationSec, firstSegUrl) =
+                parseHlsPlaylistDurationAndFirstSegment(playlistText, baseUri)
+            val segCount =
+                playlistText.lines().count { l ->
+                  val t = l.trim()
+                  t.isNotEmpty() && !t.startsWith("#")
+                }
+            var estimatedSize = 0L
+            if (firstSegUrl != null && segCount > 0) {
+              val segProbe = probeStreamMetadata(firstSegUrl, null, null, "mp4")
+              if (segProbe.fileSize > 0L) {
+                estimatedSize = segProbe.fileSize * segCount
+              }
+            }
+            val qLabel = extractQualityLabel(null, url)
+            val map = Arguments.createMap()
+            map.putString("url", url)
+            map.putString("originalUrl", url)
+            map.putString("extension", "mp4")
+            map.putString("mimeType", "application/x-mpegURL")
+            if (!qLabel.isNullOrBlank()) {
+              map.putString("quality", qLabel)
+            }
+            if (estimatedSize > 0L) {
+              map.putDouble("fileSize", estimatedSize.toDouble())
+            }
+            if (durationSec > 0.0) {
+              map.putDouble("durationSeconds", kotlin.math.round(durationSec))
+            }
+            emitStreamDetected(listOf(map))
+          }
+        } else {
+          val probed = probeStreamMetadata(url, null, null, "mp4")
+          if (!probed.isValidMedia) {
+            return@execute
+          }
+          // Skip tiny non-video responses (< 50 KB)
+          if (probed.fileSize in 1L..51200L) {
+            return@execute
+          }
+          sniffedHeadersByUrl[probed.finalUrl] = headers
+          val qLabel = extractQualityLabel(null, url) ?: extractQualityLabel(null, probed.finalUrl)
+          val map = Arguments.createMap()
+          map.putString("url", probed.finalUrl)
+          map.putString("originalUrl", url)
+          map.putString("extension", probed.extension)
+          map.putString("mimeType", probed.mimeType)
+          if (!qLabel.isNullOrBlank()) {
+            map.putString("quality", qLabel)
+          }
+          if (probed.fileSize > 0L) {
+            map.putDouble("fileSize", probed.fileSize.toDouble())
+          }
+          emitStreamDetected(listOf(map))
+        }
+      } catch (_: Exception) {}
+    }
   }
 
   @ReactMethod
@@ -578,7 +910,380 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     } catch (_: Exception) {}
   }
 
+  private fun remuxTsToMp4(inputTsFile: File, outputMp4File: File): Boolean {
+    var extractor: MediaExtractor? = null
+    var muxer: MediaMuxer? = null
+    return try {
+      extractor = MediaExtractor()
+      extractor.setDataSource(inputTsFile.absolutePath)
+      val trackCount = extractor.trackCount
+      if (trackCount <= 0) {
+        return false
+      }
+
+      muxer = MediaMuxer(outputMp4File.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+      val trackIndexMap = HashMap<Int, Int>()
+      var maxInputSize = 512 * 1024
+
+      for (i in 0 until trackCount) {
+        val format = extractor.getTrackFormat(i)
+        val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+        if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+          val muxerTrackIndex = muxer.addTrack(format)
+          trackIndexMap[i] = muxerTrackIndex
+          extractor.selectTrack(i)
+          if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            val s = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+            if (s > maxInputSize) maxInputSize = s
+          }
+        }
+      }
+
+      if (trackIndexMap.isEmpty()) {
+        return false
+      }
+
+      muxer.start()
+      val buffer = ByteBuffer.allocate(maxInputSize)
+      val bufferInfo = MediaCodec.BufferInfo()
+
+      while (true) {
+        val sampleTrackIndex = extractor.sampleTrackIndex
+        if (sampleTrackIndex < 0) {
+          break
+        }
+        val muxerTrackIndex = trackIndexMap[sampleTrackIndex]
+        if (muxerTrackIndex == null) {
+          extractor.advance()
+          continue
+        }
+        val sampleSize = extractor.readSampleData(buffer, 0)
+        if (sampleSize < 0) {
+          break
+        }
+        bufferInfo.offset = 0
+        bufferInfo.size = sampleSize
+        bufferInfo.presentationTimeUs = extractor.sampleTime.coerceAtLeast(0L)
+        @Suppress("DEPRECATION")
+        bufferInfo.flags = extractor.sampleFlags
+        muxer.writeSampleData(muxerTrackIndex, buffer, bufferInfo)
+        extractor.advance()
+      }
+
+      muxer.stop()
+      outputMp4File.exists() && outputMp4File.length() > 1024L
+    } catch (_: Exception) {
+      false
+    } finally {
+      try {
+        muxer?.release()
+      } catch (_: Exception) {}
+      try {
+        extractor?.release()
+      } catch (_: Exception) {}
+    }
+  }
+
+  private fun downloadBytesWithRetry(
+      url: String,
+      userAgent: String?,
+      headers: Map<String, String>?,
+      task: CustomDownloadTask
+  ): ByteArray {
+    var lastErr: Exception? = null
+    for (attempt in 1..6) {
+      if (task.cancelled) {
+        throw InterruptedException("Download cancelled")
+      }
+      var conn: HttpURLConnection? = null
+      try {
+        val (resolvedConn, _) = openFollowRedirects(url, null, userAgent, false, 0L, headers)
+        conn = resolvedConn
+        task.connection = conn
+        val code = conn.responseCode
+        if (code !in 200..299) {
+          throw IllegalStateException("Segment HTTP $code")
+        }
+        return conn.inputStream.use { it.readBytes() }
+      } catch (e: Exception) {
+        lastErr = e
+        if (task.cancelled) break
+        try {
+          Thread.sleep((attempt * 1000L).coerceAtMost(4000L))
+        } catch (_: InterruptedException) {}
+      } finally {
+        try {
+          conn?.disconnect()
+        } catch (_: Exception) {}
+        task.connection = null
+      }
+    }
+    throw lastErr ?: IllegalStateException("Failed to download HLS segment")
+  }
+
+  private fun executeHlsDownload(task: CustomDownloadTask, userAgent: String?) {
+    val tempTsFile = File(reactContext.cacheDir, "bdm_hls_${task.downloadId}.ts")
+    val tempMp4File = File(reactContext.cacheDir, "bdm_hls_${task.downloadId}.mp4")
+    var outStream: OutputStream? = null
+
+    try {
+      syncForegroundServiceState(task)
+      emitTaskState(task)
+
+      val headers = sniffedHeadersByUrl[task.url] ?: emptyMap()
+      var playlistUrl = task.url
+      var playlistText =
+          fetchTextWithHeaders(playlistUrl, headers)
+              ?: String(downloadBytesWithRetry(playlistUrl, userAgent, headers, task), Charsets.UTF_8)
+
+      // If master playlist was passed directly, select highest bandwidth variant
+      if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+        val baseUri = URI(playlistUrl)
+        var bestUrl: String? = null
+        var bestBw = -1L
+        var pendingBw = 0L
+        var waitingUrl = false
+        for (rawLine in playlistText.lines()) {
+          val line = rawLine.trim()
+          if (line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+            val bwMatch = Regex("""BANDWIDTH=(\d+)""").find(line)
+            pendingBw = bwMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            waitingUrl = true
+          } else if (waitingUrl && line.isNotEmpty() && !line.startsWith("#")) {
+            val resolved = baseUri.resolve(line).toString()
+            if (pendingBw >= bestBw) {
+              bestBw = pendingBw
+              bestUrl = resolved
+            }
+            waitingUrl = false
+          }
+        }
+        if (bestUrl != null) {
+          playlistUrl = bestUrl
+          playlistText =
+              fetchTextWithHeaders(playlistUrl, headers)
+                  ?: String(
+                      downloadBytesWithRetry(playlistUrl, userAgent, headers, task),
+                      Charsets.UTF_8
+                  )
+        }
+      }
+
+      val baseUri = URI(playlistUrl)
+      data class HlsSegment(
+          val url: String,
+          val keyUri: String?,
+          val keyIv: ByteArray?,
+          val sequenceIndex: Int
+      )
+
+      val segments = ArrayList<HlsSegment>()
+      var initMapUrl: String? = null
+      var currentKeyUri: String? = null
+      var currentKeyIv: ByteArray? = null
+      var mediaSeq = 0
+
+      for (rawLine in playlistText.lines()) {
+        val line = rawLine.trim()
+        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:", ignoreCase = true)) {
+          mediaSeq = line.substringAfter(":").trim().toIntOrNull() ?: 0
+        } else if (line.startsWith("#EXT-X-MAP:", ignoreCase = true)) {
+          val uriMatch = Regex("""URI="([^"]+)"""").find(line)
+          if (uriMatch != null) {
+            initMapUrl = baseUri.resolve(uriMatch.groupValues[1]).toString()
+          }
+        } else if (line.startsWith("#EXT-X-KEY:", ignoreCase = true)) {
+          if (line.contains("METHOD=NONE", ignoreCase = true)) {
+            currentKeyUri = null
+            currentKeyIv = null
+          } else if (line.contains("METHOD=AES-128", ignoreCase = true)) {
+            val uriMatch = Regex("""URI="([^"]+)"""").find(line)
+            if (uriMatch != null) {
+              currentKeyUri = baseUri.resolve(uriMatch.groupValues[1]).toString()
+              val ivMatch = Regex("""IV=0x([0-9a-fA-F]+)""").find(line)
+              currentKeyIv =
+                  if (ivMatch != null) {
+                    val hex = ivMatch.groupValues[1].padStart(32, '0').takeLast(32)
+                    ByteArray(16) { idx ->
+                      hex.substring(idx * 2, idx * 2 + 2).toInt(16).toByte()
+                    }
+                  } else {
+                    null
+                  }
+            }
+          }
+        } else if (line.isNotEmpty() && !line.startsWith("#")) {
+          val segUrl = baseUri.resolve(line).toString()
+          segments.add(
+              HlsSegment(
+                  url = segUrl,
+                  keyUri = currentKeyUri,
+                  keyIv = currentKeyIv,
+                  sequenceIndex = mediaSeq + segments.size
+              )
+          )
+        }
+      }
+
+      if (segments.isEmpty()) {
+        throw IllegalStateException("No downloadable video segments found in HLS playlist.")
+      }
+
+      val keyCache = HashMap<String, ByteArray>()
+      var lastEmitTime = System.currentTimeMillis()
+
+      FileOutputStream(tempTsFile).use { tsOut ->
+        if (initMapUrl != null && !task.cancelled) {
+          val initBytes = downloadBytesWithRetry(initMapUrl, userAgent, headers, task)
+          tsOut.write(initBytes)
+          task.bytesDownloaded += initBytes.size
+        }
+
+        val totalSegments = segments.size
+        for (i in 0 until totalSegments) {
+          if (task.cancelled) {
+            break
+          }
+          val seg = segments[i]
+          var segBytes = downloadBytesWithRetry(seg.url, userAgent, headers, task)
+
+          if (seg.keyUri != null) {
+            val keyBytes =
+                keyCache[seg.keyUri]
+                    ?: downloadBytesWithRetry(seg.keyUri, userAgent, headers, task).also {
+                      keyCache[seg.keyUri] = it
+                    }
+            val ivBytes =
+                seg.keyIv
+                    ?: ByteArray(16).apply {
+                      val seq = seg.sequenceIndex
+                      this[12] = ((seq ushr 24) and 0xFF).toByte()
+                      this[13] = ((seq ushr 16) and 0xFF).toByte()
+                      this[14] = ((seq ushr 8) and 0xFF).toByte()
+                      this[15] = (seq and 0xFF).toByte()
+                    }
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(keyBytes, "AES"),
+                IvParameterSpec(ivBytes)
+            )
+            segBytes = cipher.doFinal(segBytes)
+          }
+
+          tsOut.write(segBytes)
+          task.bytesDownloaded += segBytes.size
+
+          val completedSegs = i + 1
+          val avgSegBytes = task.bytesDownloaded / completedSegs.coerceAtLeast(1)
+          task.totalBytes = avgSegBytes * totalSegments
+          task.progress = ((completedSegs.toDouble() / totalSegments.toDouble()) * 95.0).coerceIn(0.0, 95.0)
+
+          val now = System.currentTimeMillis()
+          if (now - lastEmitTime >= 450L || completedSegs == totalSegments) {
+            lastEmitTime = now
+            emitTaskState(task)
+          }
+        }
+        tsOut.flush()
+      }
+
+      if (task.cancelled) {
+        task.status = "cancelled"
+        task.progress = 0.0
+        emitTaskState(task)
+        return
+      }
+
+      // Remux MPEG-TS stream into a clean, universally playable MP4 file
+      task.progress = 96.0
+      emitTaskState(task)
+
+      val sourceForOutput =
+          if (initMapUrl == null && remuxTsToMp4(tempTsFile, tempMp4File)) {
+            tempMp4File
+          } else {
+            tempTsFile
+          }
+
+      task.progress = 98.0
+      emitTaskState(task)
+
+      val output = createDownloadOutputStream(task)
+      outStream = output
+      FileInputStream(sourceForOutput).use { input ->
+        val buf = ByteArray(128 * 1024)
+        var read: Int
+        while (input.read(buf).also { read = it } != -1) {
+          output.write(buf, 0, read)
+        }
+      }
+      output.flush()
+      output.close()
+      outStream = null
+
+      val finalSize = sourceForOutput.length()
+      if (finalSize > 0L) {
+        task.bytesDownloaded = finalSize
+        task.totalBytes = finalSize
+      }
+
+      val file = task.destFile
+      if (file != null && task.contentUri == null) {
+        try {
+          MediaScannerConnection.scanFile(
+              reactContext,
+              arrayOf(file.absolutePath),
+              arrayOf(task.mimeType)
+          ) { _, scannedUri ->
+            if (scannedUri != null) {
+              task.contentUri = scannedUri
+              task.localUri = scannedUri.toString()
+            }
+          }
+        } catch (_: Exception) {}
+      }
+
+      task.status = "completed"
+      task.progress = 100.0
+      emitTaskState(task)
+    } catch (e: Exception) {
+      try {
+        outStream?.close()
+      } catch (_: Exception) {}
+      cleanupPartialDownload(task)
+
+      if (task.cancelled) {
+        task.status = "cancelled"
+        task.progress = 0.0
+      } else {
+        task.status = "failed"
+        task.errorMessage = e.message ?: "HLS video download failed."
+      }
+      emitTaskState(task)
+    } finally {
+      try {
+        outStream?.close()
+      } catch (_: Exception) {}
+      try {
+        if (tempTsFile.exists()) tempTsFile.delete()
+      } catch (_: Exception) {}
+      try {
+        if (tempMp4File.exists()) tempMp4File.delete()
+      } catch (_: Exception) {}
+      syncForegroundServiceState(null)
+    }
+  }
+
   private fun executeCustomDownload(task: CustomDownloadTask, userAgent: String?) {
+    val lowerUrl = task.url.lowercase()
+    if (lowerUrl.substringBefore("?").endsWith(".m3u8") ||
+        lowerUrl.contains(".m3u8?") ||
+        task.mimeType.contains("mpegurl", ignoreCase = true)) {
+      executeHlsDownload(task, userAgent)
+      return
+    }
+
     var conn: HttpURLConnection? = null
     var outStream: OutputStream? = null
 
@@ -594,11 +1299,13 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       var resumeAttempt = 0
       val maxResumeAttempts = 20
 
+      val sniffedHeaders = sniffedHeadersByUrl[task.url]
+
       while (!task.cancelled) {
         try {
           val resumeOffset = task.bytesDownloaded
           val (resolvedConn, _) =
-              openFollowRedirects(task.url, null, userAgent, false, resumeOffset)
+              openFollowRedirects(task.url, null, userAgent, false, resumeOffset, sniffedHeaders)
           conn = resolvedConn
           task.connection = conn
 
@@ -932,16 +1639,17 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           // 4. Parse direct .mp4 / .webm URLs or /stream/<res>/ paths in inline player scripts
           val directStreamRegex =
               Regex(
-                  """["']((?:https?:\\?/\\?/[^"'\s]+|\/stream\/\d+\/[^"'\s]+)(?:\.mp4|\.webm)?)["']""",
+                  """["']((?:https?:\\?/\\?/[^"'\s]+|\/stream\/\d{3,4}\/[^"'\s]+)(?:\.mp4|\.webm)?)["']""",
                   RegexOption.IGNORE_CASE
               )
           directStreamRegex.findAll(html).forEach { match ->
             val candidate = match.groupValues[1].replace("\\/", "/")
             val lower = candidate.lowercase()
-            if (lower.contains("/stream/") ||
-                lower.substringBefore("?").endsWith(".mp4") ||
-                lower.substringBefore("?").endsWith(".webm")) {
-              queueCandidate(candidate, null, if (lower.contains(".webm")) "webm" else "mp4")
+            val cleanLower = lower.substringBefore("?").substringBefore("#")
+            if (Regex("""/stream/\d{3,4}/""").containsMatchIn(cleanLower) ||
+                cleanLower.endsWith(".mp4") ||
+                cleanLower.endsWith(".webm")) {
+              queueCandidate(candidate, null, if (cleanLower.contains(".webm")) "webm" else "mp4")
             }
           }
 
@@ -986,6 +1694,9 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
                   userAgent,
                   cand.extHint
               )
+          if (!probed.isValidMedia) {
+            continue
+          }
           if (!seenFinalUrls.add(probed.finalUrl)) {
             continue
           }

@@ -3,7 +3,9 @@ import {
   NativeBdmDownloadModule,
   NativeDownloadProgressEvent,
   NativeStartDownloadResult,
+  NativeStreamDetectedEvent,
   subscribeNativeDownloadProgress,
+  subscribeNativeStreamDetected,
 } from '../../native';
 
 export interface StartDownloadParams {
@@ -185,6 +187,26 @@ export const DownloadService = {
     callback: (event: NativeDownloadProgressEvent) => void,
   ): () => void {
     const sub = subscribeNativeDownloadProgress(callback);
+    return () => {
+      sub?.remove();
+    };
+  },
+
+  async attachWebViewSniffer(): Promise<boolean> {
+    if (!NativeBdmDownloadModule) {
+      return false;
+    }
+    try {
+      return await NativeBdmDownloadModule.attachWebViewSniffer();
+    } catch {
+      return false;
+    }
+  },
+
+  subscribeStreamDetected(
+    callback: (event: NativeStreamDetectedEvent) => void,
+  ): () => void {
+    const sub = subscribeNativeStreamDetected(callback);
     return () => {
       sub?.remove();
     };

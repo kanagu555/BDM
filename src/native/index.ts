@@ -20,6 +20,11 @@ export interface NativeExtractedEmbedVideo {
   mimeType: string;
   quality?: string;
   fileSize?: number;
+  durationSeconds?: number;
+}
+
+export interface NativeStreamDetectedEvent {
+  videos: NativeExtractedEmbedVideo[];
 }
 
 export interface NativeDownloadProgressEvent {
@@ -72,6 +77,7 @@ interface BdmDownloadNativeInterface {
   ): Promise<boolean>;
   loadPersistedState(): Promise<string | null>;
   savePersistedState(stateJson: string): Promise<boolean>;
+  attachWebViewSniffer(): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -95,4 +101,13 @@ export function subscribeNativeDownloadProgress(
     return null;
   }
   return downloadEventEmitter.addListener('BDM_DOWNLOAD_PROGRESS', listener);
+}
+
+export function subscribeNativeStreamDetected(
+  listener: (event: NativeStreamDetectedEvent) => void,
+): EmitterSubscription | null {
+  if (!downloadEventEmitter) {
+    return null;
+  }
+  return downloadEventEmitter.addListener('BDM_STREAM_DETECTED', listener);
 }

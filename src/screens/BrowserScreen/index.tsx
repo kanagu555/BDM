@@ -127,6 +127,68 @@ export const BrowserScreen: React.FC = () => {
     }
   }, [currentUrl, isEditingAddress]);
 
+  // Attach native WebView network sniffer (captures HLS .m3u8 & cross-origin iframe streams)
+  useEffect(() => {
+    const attachTimer = setTimeout(() => {
+      DownloadService.attachWebViewSniffer().catch(() => {});
+    }, 300);
+
+    const unsubscribe = DownloadService.subscribeStreamDetected((payload) => {
+      if (!payload?.videos || !Array.isArray(payload.videos)) {
+        return;
+      }
+      const stateSnapshot = useAppStore.getState();
+      const activeTitle =
+        stateSnapshot.pageTitle && stateSnapshot.pageTitle.trim()
+          ? stateSnapshot.pageTitle.trim()
+          : 'Detected Video';
+      const activeUrl = stateSnapshot.currentUrl;
+      const now = Date.now();
+
+      const mapped: DetectedVideo[] = payload.videos
+        .filter((v) => v && typeof v.url === 'string' && v.url.trim().length > 0)
+        .map((v, idx) => {
+          const qualitySuffix =
+            v.quality && !activeTitle.toLowerCase().includes(v.quality.toLowerCase())
+              ? ` (${v.quality})`
+              : '';
+          const title =
+            v.title && v.title.trim().length > 0
+              ? v.title.trim()
+              : `${activeTitle}${qualitySuffix}`;
+          const ext: 'mp4' | 'webm' = v.extension === 'webm' ? 'webm' : 'mp4';
+          return {
+            id: `vid-sniff-${ext}-${idx}-${v.url.length}`,
+            url: v.url.trim(),
+            originalUrl: v.originalUrl || v.url.trim(),
+            title,
+            extension: ext,
+            mimeType: v.mimeType || (ext === 'webm' ? 'video/webm' : 'video/mp4'),
+            pageUrl: activeUrl,
+            quality: v.quality,
+            fileSize:
+              typeof v.fileSize === 'number' && v.fileSize > 0
+                ? Math.round(v.fileSize)
+                : undefined,
+            durationSeconds:
+              typeof v.durationSeconds === 'number' && v.durationSeconds > 0
+                ? Math.round(v.durationSeconds)
+                : undefined,
+            detectedAt: now,
+          };
+        });
+
+      if (mapped.length > 0) {
+        mergeDetectedVideos(mapped);
+      }
+    });
+
+    return () => {
+      clearTimeout(attachTimer);
+      unsubscribe();
+    };
+  }, [webViewSessionKey, mergeDetectedVideos]);
+
   // Proactively inspect the active webpage & any embedded player iframes for downloadable videos
   useEffect(() => {
     let cancelled = false;
@@ -642,6 +704,7 @@ export const BrowserScreen: React.FC = () => {
           onLoadStart={() => {
             setIsLoading(true);
             setLoadError(null);
+            DownloadService.attachWebViewSniffer().catch(() => {});
           }}
           onLoadProgress={handleLoadProgress}
           onLoadEnd={() => {

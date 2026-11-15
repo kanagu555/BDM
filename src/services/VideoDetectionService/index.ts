@@ -518,7 +518,6 @@ export const VideoDetectionService = {
     if (
       lower.startsWith('blob:') ||
       lower.startsWith('data:') ||
-      lower.includes('.m3u8') ||
       lower.includes('.mpd')
     ) {
       return false;
