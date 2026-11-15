@@ -28,10 +28,13 @@ export interface RecentSite {
 export interface DetectedVideo {
   id: string;
   url: string;
+  originalUrl?: string;
   title: string;
   extension: 'mp4' | 'webm';
   mimeType: string;
   pageUrl: string;
+  quality?: string;
+  fileSize?: number;
   durationSeconds?: number;
   detectedAt: number;
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { useAppTheme } from '../../hooks/useAppTheme';
+import { DownloadService } from '../../services/DownloadService';
 import { Radius, Spacing, Typography } from '../../theme';
 import { DetectedVideo } from '../../types';
 import {
@@ -27,6 +28,8 @@ interface DownloadBottomSheetProps {
   onClose: () => void;
   onDownload: (video: DetectedVideo, fileName: string) => void;
 }
+
+type FormatFilter = 'all' | 'mp4' | 'webm';
 
 function sanitizeFileName(rawTitle: string, extension: 'mp4' | 'webm'): string {
   const cleaned = rawTitle
@@ -53,6 +56,13 @@ function formatDuration(seconds?: number): string | null {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+function formatFileSize(bytes?: number): string | null {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+  return DownloadService.formatBytes(bytes);
+}
+
 export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
   visible,
   videos,
@@ -62,12 +72,30 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
   const { colors } = useAppTheme();
   const [selectedVideoId, setSelectedVideoId] = useState<string>('');
   const [customFileName, setCustomFileName] = useState<string>('');
+  const [formatFilter, setFormatFilter] = useState<FormatFilter>('all');
 
   const slideAnim = useRef(new Animated.Value(380)).current;
   const backdropAnim = useRef(new Animated.Value(0)).current;
 
+  const availableExtensions = useMemo(() => {
+    const set = new Set<'mp4' | 'webm'>();
+    videos.forEach((v) => set.add(v.extension));
+    return Array.from(set);
+  }, [videos]);
+
+  const filteredVideos = useMemo(() => {
+    if (formatFilter === 'all') {
+      return videos;
+    }
+    const matching = videos.filter((v) => v.extension === formatFilter);
+    return matching.length > 0 ? matching : videos;
+  }, [videos, formatFilter]);
+
   const selectedVideo: DetectedVideo | undefined =
-    videos.find((v) => v.id === selectedVideoId) || videos[0];
+    filteredVideos.find((v) => v.id === selectedVideoId) ||
+    videos.find((v) => v.id === selectedVideoId) ||
+    filteredVideos[0] ||
+    videos[0];
 
   // Initialize selection when bottom sheet opens or video list updates
   useEffect(() => {
@@ -77,7 +105,11 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
         ? videos.find((v) => v.id === selectedVideoId)!
         : videos[0];
       setSelectedVideoId(target.id);
-      setCustomFileName(sanitizeFileName(target.title, target.extension));
+      setCustomFileName((prev) =>
+        prev && currentExists
+          ? prev
+          : sanitizeFileName(target.title, target.extension),
+      );
     }
   }, [visible, videos, selectedVideoId]);
 
@@ -124,6 +156,17 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
     setCustomFileName(sanitizeFileName(video.title, video.extension));
   };
 
+  const handleSelectFormatFilter = (filter: FormatFilter) => {
+    setFormatFilter(filter);
+    const nextList =
+      filter === 'all'
+        ? videos
+        : videos.filter((v) => v.extension === filter);
+    if (nextList.length > 0 && !nextList.some((v) => v.id === selectedVideoId)) {
+      handleSelectVideo(nextList[0]);
+    }
+  };
+
   const handleConfirmDownload = () => {
     if (!selectedVideo) {
       return;
@@ -140,6 +183,7 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
   }
 
   const formattedDuration = formatDuration(selectedVideo.durationSeconds);
+  const formattedSize = formatFileSize(selectedVideo.fileSize);
 
   return (
     <Modal
@@ -187,11 +231,11 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                 ]}>
                 <VideoIcon size={22} color={colors.primary} />
               </View>
-              <View>
+              <View style={styles.headerTextCol}>
                 <Text
                   style={[styles.headerTitle, { color: colors.textPrimary }]}>
                   {videos.length > 1
-                    ? `Download Video (${videos.length} Detected)`
+                    ? `Download Video (${videos.length} Formats/Qualities)`
                     : 'Download Detected Video'}
                 </Text>
                 <Text
@@ -199,7 +243,9 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                     styles.headerSubtitle,
                     { color: colors.textSecondary },
                   ]}>
-                  Saves directly to Downloads/BDM
+                  {formattedSize
+                    ? `Size: ${formattedSize} • Saves to Downloads/BDM`
+                    : 'Saves directly to Downloads/BDM'}
                 </Text>
               </View>
             </View>
@@ -221,20 +267,68 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled">
-            {/* Multiple Video Selection List (when > 1 video is detected) */}
-            {videos.length > 1 ? (
+            {/* Format Filter Tabs when multiple formats (.MP4 and .WEBM) are available */}
+            {availableExtensions.length > 1 ? (
+              <View style={styles.formatFilterRow}>
+                {(['all', 'mp4', 'webm'] as FormatFilter[]).map((fmt) => {
+                  const isActive = formatFilter === fmt;
+                  const count =
+                    fmt === 'all'
+                      ? videos.length
+                      : videos.filter((v) => v.extension === fmt).length;
+                  if (count === 0) {
+                    return null;
+                  }
+                  const label =
+                    fmt === 'all'
+                      ? `All (${count})`
+                      : `.${fmt.toUpperCase()} (${count})`;
+                  return (
+                    <TouchableOpacity
+                      key={fmt}
+                      activeOpacity={0.85}
+                      onPress={() => handleSelectFormatFilter(fmt)}
+                      style={[
+                        styles.formatFilterChip,
+                        {
+                          backgroundColor: isActive
+                            ? colors.primary
+                            : colors.surfaceElevated,
+                          borderColor: isActive
+                            ? colors.primary
+                            : colors.border,
+                        },
+                      ]}>
+                      <Text
+                        style={[
+                          styles.formatFilterChipText,
+                          {
+                            color: isActive ? '#FFFFFF' : colors.textPrimary,
+                          },
+                        ]}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            {/* Format / Quality / Stream Selection List */}
+            {filteredVideos.length > 1 ? (
               <View style={styles.sectionBlock}>
                 <Text
                   style={[
                     styles.sectionLabel,
                     { color: colors.textSecondary },
                   ]}>
-                  SELECT VIDEO SOURCE ({videos.length})
+                  SELECT FORMAT & QUALITY ({filteredVideos.length})
                 </Text>
                 <View style={styles.selectionList}>
-                  {videos.map((vid, idx) => {
+                  {filteredVideos.map((vid, idx) => {
                     const isSelected = vid.id === selectedVideo.id;
                     const dur = formatDuration(vid.durationSeconds);
+                    const vidSize = formatFileSize(vid.fileSize);
                     return (
                       <TouchableOpacity
                         key={vid.id}
@@ -277,7 +371,7 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                               styles.selectionTitle,
                               { color: colors.textPrimary },
                             ]}>
-                            {vid.title || `Video Source ${idx + 1}`}
+                            {vid.title || `Video Stream ${idx + 1}`}
                           </Text>
                           <Text
                             numberOfLines={1}
@@ -290,20 +384,48 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                         </View>
 
                         <View style={styles.selectionBadgesCol}>
-                          <View
-                            style={[
-                              styles.extBadge,
-                              {
-                                backgroundColor: isSelected
-                                  ? colors.primary
-                                  : colors.secondary,
-                              },
-                            ]}>
-                            <Text style={styles.extBadgeText}>
-                              .{vid.extension.toUpperCase()}
-                            </Text>
+                          <View style={styles.badgeRow}>
+                            {vid.quality ? (
+                              <View
+                                style={[
+                                  styles.qualityBadge,
+                                  {
+                                    backgroundColor: colors.surface,
+                                    borderColor: colors.border,
+                                  },
+                                ]}>
+                                <Text
+                                  style={[
+                                    styles.qualityBadgeText,
+                                    { color: colors.textPrimary },
+                                  ]}>
+                                  {vid.quality}
+                                </Text>
+                              </View>
+                            ) : null}
+                            <View
+                              style={[
+                                styles.extBadge,
+                                {
+                                  backgroundColor: isSelected
+                                    ? colors.primary
+                                    : colors.secondary,
+                                },
+                              ]}>
+                              <Text style={styles.extBadgeText}>
+                                .{vid.extension.toUpperCase()}
+                              </Text>
+                            </View>
                           </View>
-                          {dur ? (
+                          {vidSize ? (
+                            <Text
+                              style={[
+                                styles.sizeMetaText,
+                                { color: colors.primary },
+                              ]}>
+                              {vidSize}
+                            </Text>
+                          ) : dur ? (
                             <Text
                               style={[
                                 styles.durationText,
@@ -320,7 +442,7 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
               </View>
             ) : null}
 
-            {/* Selected Video Details Card: Title, Extension, URL Preview */}
+            {/* Selected Video Details Card: Title, Extension, Quality, File Size & URL Preview */}
             <View
               style={[
                 styles.detailsCard,
@@ -336,7 +458,7 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                       styles.fieldLabel,
                       { color: colors.textSecondary },
                     ]}>
-                    DETECTED VIDEO TITLE
+                    DETECTED VIDEO FILE
                   </Text>
                   <Text
                     numberOfLines={2}
@@ -349,15 +471,52 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                 </View>
 
                 <View style={styles.formatMetaCol}>
-                  <View
-                    style={[
-                      styles.extLargeBadge,
-                      { backgroundColor: colors.primary },
-                    ]}>
-                    <Text style={styles.extLargeBadgeText}>
-                      {selectedVideo.extension.toUpperCase()}
-                    </Text>
+                  <View style={styles.badgeRow}>
+                    {selectedVideo.quality ? (
+                      <View
+                        style={[
+                          styles.qualityLargeBadge,
+                          {
+                            backgroundColor: colors.surface,
+                            borderColor: colors.primary,
+                          },
+                        ]}>
+                        <Text
+                          style={[
+                            styles.qualityLargeBadgeText,
+                            { color: colors.primary },
+                          ]}>
+                          {selectedVideo.quality}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View
+                      style={[
+                        styles.extLargeBadge,
+                        { backgroundColor: colors.primary },
+                      ]}>
+                      <Text style={styles.extLargeBadgeText}>
+                        {selectedVideo.extension.toUpperCase()}
+                      </Text>
+                    </View>
                   </View>
+
+                  {formattedSize ? (
+                    <View
+                      style={[
+                        styles.fileSizePill,
+                        { backgroundColor: colors.primarySoft },
+                      ]}>
+                      <Text
+                        style={[
+                          styles.fileSizePillText,
+                          { color: colors.primary },
+                        ]}>
+                        {formattedSize}
+                      </Text>
+                    </View>
+                  ) : null}
+
                   {formattedDuration ? (
                     <Text
                       style={[
@@ -408,7 +567,7 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                       styles.fieldLabel,
                       { color: colors.textSecondary },
                     ]}>
-                    DIRECT VIDEO URL PREVIEW
+                    RESOLVED STREAM URL
                   </Text>
                 </View>
                 <View
@@ -438,7 +597,9 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
                     styles.destinationText,
                     { color: colors.textSecondary },
                   ]}>
-                  Format: {selectedVideo.mimeType} • Destination: Downloads/BDM
+                  Format: {selectedVideo.mimeType}
+                  {formattedSize ? ` • Size: ${formattedSize}` : ''} •
+                  Downloads/BDM
                 </Text>
               </View>
             </View>
@@ -475,7 +636,9 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
               ]}>
               <DownloadIcon size={19} color="#FFFFFF" />
               <Text style={styles.downloadButtonText}>
-                Download .{selectedVideo.extension.toUpperCase()}
+                {formattedSize
+                  ? `Download .${selectedVideo.extension.toUpperCase()} (${formattedSize})`
+                  : `Download .${selectedVideo.extension.toUpperCase()}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -501,7 +664,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xl,
-    maxHeight: '84%',
+    maxHeight: '86%',
     elevation: 16,
   },
   handleRow: {
@@ -523,6 +686,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
+    flex: 1,
+  },
+  headerTextCol: {
     flex: 1,
   },
   headerIconBox: {
@@ -548,11 +714,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scrollArea: {
-    maxHeight: 420,
+    maxHeight: 440,
   },
   scrollContent: {
     gap: Spacing.md,
     paddingBottom: Spacing.sm,
+  },
+  formatFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  formatFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+  },
+  formatFilterChipText: {
+    ...Typography.caption,
+    fontSize: 12,
+    fontWeight: '700',
   },
   sectionBlock: {
     gap: Spacing.xs,
@@ -600,7 +782,22 @@ const styles = StyleSheet.create({
   },
   selectionBadgesCol: {
     alignItems: 'flex-end',
-    gap: 2,
+    gap: 3,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  qualityBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+  },
+  qualityBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   extBadge: {
     paddingHorizontal: 8,
@@ -611,6 +808,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '800',
+  },
+  sizeMetaText: {
+    ...Typography.caption,
+    fontSize: 11,
+    fontWeight: '700',
   },
   durationText: {
     ...Typography.caption,
@@ -642,7 +844,17 @@ const styles = StyleSheet.create({
   },
   formatMetaCol: {
     alignItems: 'flex-end',
-    gap: 4,
+    gap: 5,
+  },
+  qualityLargeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  qualityLargeBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
   },
   extLargeBadge: {
     paddingHorizontal: 10,
@@ -654,6 +866,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  fileSizePill: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  fileSizePillText: {
+    fontSize: 11,
+    fontWeight: '800',
   },
   durationMetaText: {
     ...Typography.caption,
@@ -701,6 +922,7 @@ const styles = StyleSheet.create({
   destinationText: {
     ...Typography.caption,
     fontSize: 11,
+    flex: 1,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -721,7 +943,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   downloadButton: {
-    flex: 1.6,
+    flex: 1.75,
     height: 48,
     borderRadius: Radius.pill,
     flexDirection: 'row',
@@ -733,6 +955,6 @@ const styles = StyleSheet.create({
   downloadButtonText: {
     ...Typography.subtitle,
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 13,
   },
 });

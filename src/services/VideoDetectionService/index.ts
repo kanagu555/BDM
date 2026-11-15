@@ -6,6 +6,7 @@ interface RawWebViewVideoItem {
   title?: string;
   extension?: string;
   mimeType?: string;
+  quality?: string;
   durationSeconds?: number;
 }
 
@@ -123,7 +124,23 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
       var pageTitle = (document && document.title) ? document.title.trim() : '';
       var pageUrl = window.location.href || '';
 
-      function addCandidate(rawUrl, declaredType, customTitle, durationSec, allowFallbackVideoTag) {
+      function extractQuality(urlStr, rawLabel) {
+        var combined = ((rawLabel || '') + ' ' + (urlStr || '')).toLowerCase();
+        var match = combined.match(/\\b(2160p|1440p|1080p|720p|480p|360p|240p|144p)\\b/i);
+        if (match) {
+          return match[1].toLowerCase();
+        }
+        var streamMatch = (urlStr || '').match(/\\/stream\\/(\\d{3,4})\\//i);
+        if (streamMatch) {
+          return streamMatch[1] + 'p';
+        }
+        if (rawLabel && /^\\d{3,4}$/.test(String(rawLabel).trim())) {
+          return String(rawLabel).trim() + 'p';
+        }
+        return undefined;
+      }
+
+      function addCandidate(rawUrl, declaredType, customTitle, durationSec, allowFallbackVideoTag, qualityHint) {
         var absUrl = resolveAbsoluteUrl(rawUrl);
         if (!absUrl) {
           return;
@@ -146,18 +163,23 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
         }
         seenUrls[normalizedKey] = true;
 
+        var quality = extractQuality(absUrl, qualityHint);
         var title = extractReadableTitle(
           absUrl,
           customTitle,
           pageTitle,
           detectedList.length
         );
+        if (quality && title.toLowerCase().indexOf(quality.toLowerCase()) === -1) {
+          title = title + ' (' + quality + ')';
+        }
 
         detectedList.push({
           url: absUrl,
           title: title,
           extension: format.extension,
           mimeType: format.mimeType,
+          quality: quality,
           durationSeconds:
             typeof durationSec === 'number' && isFinite(durationSec) && durationSec > 0
               ? Math.round(durationSec)
@@ -168,7 +190,7 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
       // 1. Check if current document URL itself is a direct .mp4 / .webm file
       var selfFormat = detectFormat(pageUrl, document.contentType || '');
       if (selfFormat) {
-        addCandidate(pageUrl, selfFormat.mimeType, pageTitle, undefined, false);
+        addCandidate(pageUrl, selfFormat.mimeType, pageTitle, undefined, false, '');
       }
 
       // 2. Inspect all HTML5 <video> elements and their child <source> elements
@@ -186,10 +208,16 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
           videoEl.getAttribute('aria-label') ||
           videoEl.getAttribute('data-title') ||
           '';
+        var elQuality =
+          videoEl.getAttribute('label') ||
+          videoEl.getAttribute('res') ||
+          videoEl.getAttribute('size') ||
+          videoEl.getAttribute('data-quality') ||
+          '';
         var duration = videoEl.duration;
 
         if (videoEl.currentSrc) {
-          addCandidate(videoEl.currentSrc, '', elTitle, duration, true);
+          addCandidate(videoEl.currentSrc, '', elTitle, duration, true, elQuality);
         }
 
         var directSrc = videoEl.getAttribute('src') || videoEl.src;
@@ -199,7 +227,8 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
             videoEl.getAttribute('type') || '',
             elTitle,
             duration,
-            true
+            true,
+            elQuality
           );
         }
 
@@ -208,8 +237,14 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
           var srcEl = sourceNodes[j];
           var sUrl = srcEl.getAttribute('src') || srcEl.src;
           var sType = srcEl.getAttribute('type') || srcEl.type || '';
+          var sQuality =
+            srcEl.getAttribute('label') ||
+            srcEl.getAttribute('res') ||
+            srcEl.getAttribute('size') ||
+            srcEl.getAttribute('data-quality') ||
+            elQuality;
           if (sUrl) {
-            addCandidate(sUrl, sType, elTitle, duration, true);
+            addCandidate(sUrl, sType, elTitle, duration, true, sQuality);
           }
         }
       }
@@ -221,7 +256,7 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
         var href = aEl.getAttribute('href') || '';
         if (href && (href.toLowerCase().indexOf('.mp4') !== -1 || href.toLowerCase().indexOf('.webm') !== -1)) {
           var linkText = (aEl.textContent || aEl.getAttribute('title') || '').trim();
-          addCandidate(href, '', linkText, undefined, false);
+          addCandidate(href, '', linkText, undefined, false, linkText);
         }
       }
 
@@ -472,10 +507,15 @@ export const VideoDetectionService = {
         results.push({
           id: `vid-${ext}-${i}-${rawUrl.length}`,
           url: rawUrl,
+          originalUrl: rawUrl,
           title: cleanTitle,
           extension: ext,
           mimeType,
           pageUrl,
+          quality:
+            typeof item.quality === 'string' && item.quality.trim().length > 0
+              ? item.quality.trim()
+              : undefined,
           durationSeconds:
             typeof item.durationSeconds === 'number' && item.durationSeconds > 0
               ? item.durationSeconds
@@ -554,10 +594,22 @@ export const VideoDetectionService = {
           extractedList.push({
             id: `vid-embed-${ext}-${extractedList.length}-${url.length}`,
             url,
+            originalUrl:
+              typeof item.originalUrl === 'string' && item.originalUrl.trim()
+                ? item.originalUrl.trim()
+                : url,
             title,
             extension: ext,
             mimeType: ext === 'webm' ? 'video/webm' : 'video/mp4',
             pageUrl,
+            quality:
+              typeof item.quality === 'string' && item.quality.trim()
+                ? item.quality.trim()
+                : undefined,
+            fileSize:
+              typeof item.fileSize === 'number' && item.fileSize > 0
+                ? Math.round(item.fileSize)
+                : undefined,
             detectedAt: now,
           });
         }
@@ -567,5 +619,60 @@ export const VideoDetectionService = {
     }
 
     return extractedList;
+  },
+
+  /**
+   * Probes direct <video> sources for their resolved redirect URL, exact Content-Length /
+   * Content-Range file size, and quality metadata.
+   */
+  async enrichVideosWithMetadata(
+    videos: DetectedVideo[],
+    refererUrl: string,
+    userAgent: string,
+  ): Promise<DetectedVideo[]> {
+    const nativeMod = NativeBdmDownloadModule;
+    if (!nativeMod || videos.length === 0) {
+      return videos;
+    }
+
+    const enriched = await Promise.all(
+      videos.map(async (video) => {
+        if (video.fileSize && video.fileSize > 0) {
+          return video;
+        }
+        try {
+          const probed = await nativeMod.probeVideoMetadata(
+            video.url,
+            refererUrl,
+            userAgent,
+          );
+          if (!probed) {
+            return video;
+          }
+          const finalUrl =
+            typeof probed.url === 'string' && probed.url.trim()
+              ? probed.url.trim()
+              : video.url;
+          const ext: 'mp4' | 'webm' =
+            probed.extension === 'webm' ? 'webm' : video.extension;
+          return {
+            ...video,
+            url: finalUrl,
+            originalUrl: video.originalUrl || video.url,
+            extension: ext,
+            mimeType: ext === 'webm' ? 'video/webm' : 'video/mp4',
+            quality: video.quality || probed.quality || undefined,
+            fileSize:
+              typeof probed.fileSize === 'number' && probed.fileSize > 0
+                ? Math.round(probed.fileSize)
+                : video.fileSize,
+          };
+        } catch {
+          return video;
+        }
+      }),
+    );
+
+    return enriched;
   },
 };

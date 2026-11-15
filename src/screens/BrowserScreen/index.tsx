@@ -50,6 +50,7 @@ import {
 } from '../../components/Icons/BdmIcons';
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { BrowserService } from '../../services/BrowserService';
+import { DownloadService } from '../../services/DownloadService';
 import { VideoDetectionService } from '../../services/VideoDetectionService';
 import { useAppStore } from '../../store/useAppStore';
 import { Radius, Spacing, Typography } from '../../theme';
@@ -257,6 +258,12 @@ export const BrowserScreen: React.FC = () => {
 
     if (payload.videos.length > 0) {
       mergeDetectedVideos(payload.videos);
+      const enriched = await VideoDetectionService.enrichVideosWithMetadata(
+        payload.videos,
+        payload.pageUrl || currentUrl,
+        BrowserService.getUserAgent(isDesktopMode),
+      );
+      mergeDetectedVideos(enriched);
     }
 
     if (payload.iframeUrls.length > 0) {
@@ -494,8 +501,16 @@ export const BrowserScreen: React.FC = () => {
               numberOfLines={1}
               style={[styles.detectedBannerText, { color: colors.primary }]}>
               {detectedVideos.length === 1
-                ? `1 Downloadable Video Detected (${detectedVideos[0].extension.toUpperCase()})`
-                : `${detectedVideos.length} Downloadable Videos Detected`}
+                ? `1 Video Detected (${detectedVideos[0].extension.toUpperCase()}${
+                    detectedVideos[0].quality
+                      ? ` • ${detectedVideos[0].quality}`
+                      : ''
+                  }${
+                    detectedVideos[0].fileSize && detectedVideos[0].fileSize > 0
+                      ? ` • ${DownloadService.formatBytes(detectedVideos[0].fileSize)}`
+                      : ''
+                  })`
+                : `${detectedVideos.length} Downloadable Formats/Videos Detected`}
             </Text>
           </View>
           <Text

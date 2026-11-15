@@ -27,38 +27,6 @@ const INITIAL_QUICK_ACCESS: QuickAccessSite[] = [
     category: 'video',
     accentColor: '#4F46E5',
   },
-  {
-    id: 'qa-wikimedia',
-    title: 'Wikimedia Videos',
-    subtitle: 'commons.wikimedia.org',
-    url: 'https://commons.wikimedia.org/wiki/Category:Videos',
-    category: 'video',
-    accentColor: '#0EA5E9',
-  },
-  {
-    id: 'qa-pexels',
-    title: 'Pexels Free Videos',
-    subtitle: 'pexels.com/videos',
-    url: 'https://www.pexels.com/videos/',
-    category: 'video',
-    accentColor: '#10B981',
-  },
-  {
-    id: 'qa-google',
-    title: 'Google Search',
-    subtitle: 'google.com',
-    url: 'https://www.google.com',
-    category: 'search',
-    accentColor: '#F59E0B',
-  },
-  {
-    id: 'qa-mdn',
-    title: 'MDN Media Guide',
-    subtitle: 'developer.mozilla.org',
-    url: 'https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video',
-    category: 'docs',
-    accentColor: '#EC4899',
-  },
 ];
 
 const INITIAL_RECENT_SITES: RecentSite[] = [
@@ -68,22 +36,6 @@ const INITIAL_RECENT_SITES: RecentSite[] = [
     url: 'https://www.w3schools.com/html/html5_video.asp',
     hostname: 'w3schools.com',
     visitedAt: 'Just now',
-    isSearch: false,
-  },
-  {
-    id: 'rec-2',
-    title: 'Internet Archive Open Movies',
-    url: 'https://archive.org/details/movies',
-    hostname: 'archive.org',
-    visitedAt: 'Today',
-    isSearch: false,
-  },
-  {
-    id: 'rec-3',
-    title: 'Wikimedia Commons Public Videos',
-    url: 'https://commons.wikimedia.org/wiki/Category:Videos',
-    hostname: 'commons.wikimedia.org',
-    visitedAt: 'Today',
     isSearch: false,
   },
 ];
@@ -154,13 +106,50 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       if (videos.length === 0) {
         return state;
       }
-      const seen = new Set(state.detectedVideos.map((v) => v.url));
-      const additions = videos.filter((v) => !seen.has(v.url));
-      if (additions.length === 0) {
+      const nextList = [...state.detectedVideos];
+      let changed = false;
+
+      for (const incoming of videos) {
+        const existingIdx = nextList.findIndex(
+          (v) =>
+            v.url === incoming.url ||
+            (v.originalUrl && v.originalUrl === incoming.url) ||
+            (incoming.originalUrl && v.url === incoming.originalUrl) ||
+            (incoming.originalUrl &&
+              v.originalUrl &&
+              v.originalUrl === incoming.originalUrl),
+        );
+
+        if (existingIdx >= 0) {
+          const current = nextList[existingIdx];
+          const updated: DetectedVideo = {
+            ...current,
+            url: incoming.url || current.url,
+            originalUrl: incoming.originalUrl || current.originalUrl,
+            fileSize: incoming.fileSize || current.fileSize,
+            quality: incoming.quality || current.quality,
+            durationSeconds:
+              incoming.durationSeconds || current.durationSeconds,
+          };
+          if (
+            updated.url !== current.url ||
+            updated.fileSize !== current.fileSize ||
+            updated.quality !== current.quality
+          ) {
+            nextList[existingIdx] = updated;
+            changed = true;
+          }
+        } else {
+          nextList.push(incoming);
+          changed = true;
+        }
+      }
+
+      if (!changed) {
         return state;
       }
       return {
-        detectedVideos: [...state.detectedVideos, ...additions],
+        detectedVideos: nextList,
       };
     }),
 
@@ -259,7 +248,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       mimeType: video.mimeType,
       url: video.url,
       relativePath: nativeRes.relativePath,
-      fileSize: 0,
+      fileSize: video.fileSize && video.fileSize > 0 ? video.fileSize : 0,
       downloadedBytes: 0,
       progress: 0,
       status: 'downloading',
