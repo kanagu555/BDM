@@ -29,22 +29,22 @@ const THEME_OPTIONS: {
   subtitle: string;
   value: ThemeMode;
 }[] = [
-  {
-    label: 'System',
-    subtitle: 'Follow device setting',
-    value: 'system',
-  },
-  {
-    label: 'Light',
-    subtitle: 'Clean light surface',
-    value: 'light',
-  },
-  {
-    label: 'Dark',
-    subtitle: 'OLED-friendly dark',
-    value: 'dark',
-  },
-];
+    {
+      label: 'System',
+      subtitle: 'Follow device setting',
+      value: 'system',
+    },
+    {
+      label: 'Light',
+      subtitle: 'Clean light surface',
+      value: 'light',
+    },
+    {
+      label: 'Dark',
+      subtitle: 'OLED-friendly dark',
+      value: 'dark',
+    },
+  ];
 
 export const SettingsScreen: React.FC = () => {
   const { colors, isDark, themeMode, setThemeMode } = useAppTheme();
@@ -288,7 +288,7 @@ export const SettingsScreen: React.FC = () => {
               </Text>
               <Text
                 style={[styles.versionValue, { color: colors.textPrimary }]}>
-                1.0.0 (Build 1)
+                1.0.1 (Build 2)
               </Text>
             </View>
 
