@@ -7,6 +7,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -14,6 +15,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.bdm.R
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
@@ -109,35 +111,57 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  private fun unescapeDisplayTitle(raw: String): String {
+    var result = raw
+    val unicodeRegex = Regex("""\\u([0-9a-fA-F]{4})""")
+    result =
+        unicodeRegex.replace(result) { match ->
+          val code = match.groupValues[1].toInt(16)
+          code.toChar().toString()
+        }
+    return result
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+  }
+
   private fun updateNotification(task: CustomDownloadTask) {
     try {
       ensureNotificationChannel()
+      val cleanTitle = unescapeDisplayTitle(task.title.ifBlank { task.fileName })
+      val largeIconBitmap =
+          try {
+            BitmapFactory.decodeResource(reactContext.resources, R.mipmap.ic_launcher)
+          } catch (_: Exception) {
+            null
+          }
+
       val builder =
           NotificationCompat.Builder(reactContext, NOTIFICATION_CHANNEL_ID)
-              .setSmallIcon(android.R.drawable.stat_sys_download)
-              .setContentTitle(task.title.ifBlank { task.fileName })
+              .setSmallIcon(R.drawable.ic_stat_bdm)
+              .setColor(0xFF7C5CFC.toInt())
+              .setContentTitle(cleanTitle)
               .setOnlyAlertOnce(true)
               .setPriority(NotificationCompat.PRIORITY_LOW)
 
+      if (largeIconBitmap != null) {
+        builder.setLargeIcon(largeIconBitmap)
+      }
+
       when (task.status) {
         "downloading", "pending" -> {
-          val pct = task.progress.toInt().coerceIn(0, 100)
-          builder
-              .setSmallIcon(android.R.drawable.stat_sys_download)
-              .setContentText(
-                  if (task.totalBytes > 0L) {
-                    "Downloading ($pct%) • Downloads/BDM/${task.fileName}"
-                  } else {
-                    "Downloading • Downloads/BDM/${task.fileName}"
-                  }
-              )
-              .setProgress(100, pct, task.totalBytes <= 0L)
-              .setOngoing(true)
-          notificationManager.notify(task.notificationId, builder.build())
+          // While downloading, update the single Foreground Service notification (ID 9001)
+          // so only ONE notification appears in the shade with progress + screen-off protection.
+          syncForegroundServiceState(task)
+          notificationManager.cancel(task.notificationId)
         }
         "completed" -> {
           builder
-              .setSmallIcon(android.R.drawable.stat_sys_download_done)
+              .setSmallIcon(R.drawable.ic_stat_bdm)
               .setContentText("Download complete • Downloads/BDM/${task.fileName}")
               .setProgress(0, 0, false)
               .setOngoing(false)
@@ -146,7 +170,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         }
         "failed" -> {
           builder
-              .setSmallIcon(android.R.drawable.stat_notify_error)
+              .setSmallIcon(R.drawable.ic_stat_bdm)
               .setContentText(task.errorMessage ?: "Download failed")
               .setProgress(0, 0, false)
               .setOngoing(false)
@@ -187,23 +211,31 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
 
   private fun syncForegroundServiceState(activeTask: CustomDownloadTask?) {
     try {
-      val hasActive =
-          customTasks.values.any { it.status == "downloading" || it.status == "pending" }
-      if (hasActive) {
+      val runningTasks =
+          customTasks.values.filter { it.status == "downloading" || it.status == "pending" }
+      if (runningTasks.isNotEmpty()) {
+        val displayTask = activeTask ?: runningTasks.first()
+        val pct = displayTask.progress.toInt().coerceIn(0, 100)
+        val cleanTitle = unescapeDisplayTitle(displayTask.title.ifBlank { displayTask.fileName })
+        val progressText =
+            if (runningTasks.size > 1) {
+              "Downloading ${runningTasks.size} videos ($pct%) • Downloads/BDM"
+            } else if (displayTask.totalBytes > 0L) {
+              "Downloading ($pct%) • Downloads/BDM/${displayTask.fileName}"
+            } else {
+              "Downloading • Downloads/BDM/${displayTask.fileName}"
+            }
+
         val intent =
             Intent(reactContext, BdmDownloadForegroundService::class.java).apply {
               action = BdmDownloadForegroundService.ACTION_START
-              if (activeTask != null) {
-                val pct = activeTask.progress.toInt().coerceIn(0, 100)
-                putExtra(
-                    BdmDownloadForegroundService.EXTRA_TITLE,
-                    activeTask.title.ifBlank { activeTask.fileName }
-                )
-                putExtra(
-                    BdmDownloadForegroundService.EXTRA_PROGRESS_TEXT,
-                    "Downloading ($pct%) • Screen-off protection active"
-                )
-              }
+              putExtra(BdmDownloadForegroundService.EXTRA_TITLE, cleanTitle)
+              putExtra(BdmDownloadForegroundService.EXTRA_PROGRESS_TEXT, progressText)
+              putExtra(BdmDownloadForegroundService.EXTRA_PROGRESS_PCT, pct)
+              putExtra(
+                  BdmDownloadForegroundService.EXTRA_INDETERMINATE,
+                  displayTask.totalBytes <= 0L
+              )
             }
         ContextCompat.startForegroundService(reactContext, intent)
       } else {
@@ -458,7 +490,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       }
 
       val ext = if (mimeType.contains("webm", ignoreCase = true)) "webm" else "mp4"
-      val safeFileName = sanitizeFileName(fileName, ext)
+      val cleanTitle = unescapeDisplayTitle(title.ifBlank { fileName })
+      val safeFileName = sanitizeFileName(unescapeDisplayTitle(fileName), ext)
       val resolvedMime = mimeType.ifBlank { "video/$ext" }
       val downloadId = nextCustomDownloadId.incrementAndGet().toString()
       val notificationId = (downloadId.hashCode() and 0x7FFFFFFF).coerceAtLeast(1001)
@@ -468,7 +501,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
               downloadId = downloadId,
               url = trimmedUrl,
               fileName = safeFileName,
-              title = title.ifBlank { safeFileName },
+              title = cleanTitle.ifBlank { safeFileName },
               mimeType = resolvedMime,
               notificationId = notificationId
           )
@@ -786,7 +819,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
                 return
               }
 
-          val titleMatch =
+          val rawTitleMatch =
               Regex("""var\s+title\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
                   ?: Regex("""<title>([^<]+)</title>""", RegexOption.IGNORE_CASE)
                       .find(html)
@@ -794,6 +827,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
                       ?.get(1)
                       ?.trim()
                   ?: "Embedded Video"
+          val titleMatch = unescapeDisplayTitle(rawTitleMatch)
 
           fun queueCandidate(rawUrl: String, label: String?, extHint: String) {
             val cleaned = rawUrl.replace("\\/", "/").trim()

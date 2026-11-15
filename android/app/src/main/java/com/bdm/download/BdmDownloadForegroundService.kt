@@ -6,11 +6,13 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import com.bdm.R
 
 class BdmDownloadForegroundService : Service() {
 
@@ -22,6 +24,8 @@ class BdmDownloadForegroundService : Service() {
     const val ACTION_STOP = "com.bdm.download.ACTION_STOP_FG"
     const val EXTRA_TITLE = "extra_title"
     const val EXTRA_PROGRESS_TEXT = "extra_progress_text"
+    const val EXTRA_PROGRESS_PCT = "extra_progress_pct"
+    const val EXTRA_INDETERMINATE = "extra_indeterminate"
   }
 
   private var wakeLock: PowerManager.WakeLock? = null
@@ -46,20 +50,36 @@ class BdmDownloadForegroundService : Service() {
     val title = intent?.getStringExtra(EXTRA_TITLE) ?: "BDM Video Download Active"
     val progressText =
         intent?.getStringExtra(EXTRA_PROGRESS_TEXT)
-            ?: "Downloading in background • Screen-off protection active"
+            ?: "Downloading in background"
+    val progressPct = (intent?.getIntExtra(EXTRA_PROGRESS_PCT, 0) ?: 0).coerceIn(0, 100)
+    val indeterminate = intent?.getBooleanExtra(EXTRA_INDETERMINATE, false) ?: false
 
     ensureChannel()
     acquireLocks()
 
-    val notification =
+    val largeIconBitmap =
+        try {
+          BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+        } catch (_: Exception) {
+          null
+        }
+
+    val builder =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_stat_bdm)
+            .setColor(0xFF7C5CFC.toInt())
             .setContentTitle(title)
             .setContentText(progressText)
+            .setProgress(100, progressPct, indeterminate)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+
+    if (largeIconBitmap != null) {
+      builder.setLargeIcon(largeIconBitmap)
+    }
+
+    val notification = builder.build()
 
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
