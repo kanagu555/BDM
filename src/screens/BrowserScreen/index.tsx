@@ -614,9 +614,11 @@ export const BrowserScreen: React.FC = () => {
           ref={webViewRef}
           source={{ uri: navigationTargetUrl }}
           userAgent={BrowserService.getUserAgent(isDesktopMode)}
+          injectedJavaScriptBeforeContentLoaded={VideoDetectionService.getPreloadAdShieldScript()}
           injectedJavaScript={VideoDetectionService.getInjectionScript()}
           onMessage={handleWebViewMessage}
           javaScriptEnabled={true}
+          javaScriptCanOpenWindowsAutomatically={false}
           domStorageEnabled={true}
           allowsFullscreenVideo={true}
           allowsInlineMediaPlayback={true}
@@ -630,7 +632,11 @@ export const BrowserScreen: React.FC = () => {
           pullToRefreshEnabled={true}
           startInLoadingState={false}
           onShouldStartLoadWithRequest={(request) => {
-            return BrowserService.isAllowedNavigationUrl(request.url);
+            return BrowserService.isAllowedNavigationUrl(
+              request.url,
+              currentUrl,
+              navigationTargetUrl,
+            );
           }}
           onNavigationStateChange={handleNavigationStateChange}
           onLoadStart={() => {

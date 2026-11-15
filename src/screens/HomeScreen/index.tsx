@@ -13,13 +13,10 @@ import { useNavigation } from '@react-navigation/native';
 import { AppHeader } from '../../components/AppHeader';
 import { AddressBar } from '../../components/AddressBar';
 import { LoadingIndicator } from '../../components/LoadingIndicator';
-import { EmptyState } from '../../components/EmptyState';
 import {
   BdmLogoMark,
-  CloseIcon,
   DownloadIcon,
   GlobeIcon,
-  HistoryIcon,
   SearchIcon,
   SettingsIcon,
   ShieldIcon,
@@ -28,7 +25,7 @@ import {
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { useAppStore } from '../../store/useAppStore';
 import { Radius, Spacing, Typography } from '../../theme';
-import { QuickAccessSite, RecentSite, RootTabParamList } from '../../types';
+import { QuickAccessSite, RootTabParamList } from '../../types';
 
 type HomeNavProp = BottomTabNavigationProp<RootTabParamList, 'Home'>;
 
@@ -40,15 +37,12 @@ export const HomeScreen: React.FC = () => {
   const [loadingTarget, setLoadingTarget] = useState<string | null>(null);
 
   const quickAccessSites = useAppStore((state) => state.quickAccessSites);
-  const recentSites = useAppStore((state) => state.recentSites);
   const downloads = useAppStore((state) => state.downloads);
   const isAddressResolving = useAppStore((state) => state.isAddressResolving);
   const setIsAddressResolving = useAppStore(
     (state) => state.setIsAddressResolving,
   );
   const openAddressInput = useAppStore((state) => state.openAddressInput);
-  const removeRecentSite = useAppStore((state) => state.removeRecentSite);
-  const clearRecentSites = useAppStore((state) => state.clearRecentSites);
 
   const activeDownloadsCount = downloads.filter(
     (d) => d.status === 'downloading' || d.status === 'pending',
@@ -74,10 +68,6 @@ export const HomeScreen: React.FC = () => {
   };
 
   const handleQuickSitePress = (site: QuickAccessSite) => {
-    handleOpenInBrowser(site.url);
-  };
-
-  const handleRecentSitePress = (site: RecentSite) => {
     handleOpenInBrowser(site.url);
   };
 
@@ -113,7 +103,7 @@ export const HomeScreen: React.FC = () => {
               ]}>
               <ShieldIcon size={15} color={colors.primary} />
               <Text style={[styles.heroBadgeText, { color: colors.primary }]}>
-                SMART VIDEO DETECTION READY
+                SMART VIDEO DETECTION & AD SHIELD READY
               </Text>
             </View>
           </View>
@@ -258,109 +248,6 @@ export const HomeScreen: React.FC = () => {
             </TouchableOpacity>
           ))}
         </View>
-
-        {/* Recently Visited Websites Section */}
-        <View style={styles.sectionHeaderRow}>
-          <View style={styles.sectionTitleWithIcon}>
-            <HistoryIcon size={18} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-              Recently Visited
-            </Text>
-          </View>
-          {recentSites.length > 0 ? (
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={clearRecentSites}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={[styles.clearText, { color: colors.primary }]}>
-                Clear All
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        {recentSites.length === 0 ? (
-          <EmptyState
-            title="No Recent Browsing History"
-            subtitle="Websites and video pages you open in the BDM browser will appear here for fast one-tap access."
-            icon={<GlobeIcon size={24} color={colors.primary} />}
-          />
-        ) : (
-          <View
-            style={[
-              styles.recentListCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}>
-            {recentSites.map((item, index) => {
-              const isLast = index === recentSites.length - 1;
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  activeOpacity={0.8}
-                  onPress={() => handleRecentSitePress(item)}
-                  style={[
-                    styles.recentRow,
-                    !isLast && {
-                      borderBottomWidth: 1,
-                      borderBottomColor: colors.border,
-                    },
-                  ]}>
-                  <View
-                    style={[
-                      styles.recentAvatar,
-                      { backgroundColor: colors.primarySoft },
-                    ]}>
-                    {item.isSearch ? (
-                      <SearchIcon size={16} color={colors.primary} />
-                    ) : (
-                      <GlobeIcon size={16} color={colors.primary} />
-                    )}
-                  </View>
-
-                  <View style={styles.recentInfoCol}>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.recentTitle,
-                        { color: colors.textPrimary },
-                      ]}>
-                      {item.title}
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.recentUrl,
-                        { color: colors.textSecondary },
-                      ]}>
-                      {item.url}
-                    </Text>
-                  </View>
-
-                  <View style={styles.recentRightCol}>
-                    <Text
-                      style={[
-                        styles.recentTime,
-                        { color: colors.textSecondary },
-                      ]}>
-                      {item.visitedAt}
-                    </Text>
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove ${item.title} from history`}
-                      onPress={() => removeRecentSite(item.id)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={styles.removeRecentBtn}>
-                      <CloseIcon size={14} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -456,21 +343,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: -Spacing.xs,
   },
-  sectionTitleWithIcon: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
   sectionTitle: {
     ...Typography.h2,
   },
   sectionSubtitle: {
     ...Typography.caption,
     marginTop: 2,
-  },
-  clearText: {
-    ...Typography.caption,
-    fontWeight: '700',
   },
   quickAccessGrid: {
     flexDirection: 'row',
@@ -515,48 +393,5 @@ const styles = StyleSheet.create({
   quickSubtitle: {
     ...Typography.caption,
     fontSize: 11,
-  },
-  recentListCard: {
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  recentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
-    gap: Spacing.sm,
-  },
-  recentAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recentInfoCol: {
-    flex: 1,
-    gap: 2,
-  },
-  recentTitle: {
-    ...Typography.subtitle,
-    fontSize: 14,
-  },
-  recentUrl: {
-    ...Typography.caption,
-    fontSize: 12,
-  },
-  recentRightCol: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
-  recentTime: {
-    ...Typography.caption,
-    fontSize: 11,
-  },
-  removeRecentBtn: {
-    padding: 4,
   },
 });

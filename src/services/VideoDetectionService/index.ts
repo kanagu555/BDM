@@ -32,11 +32,78 @@ export interface ParsedWebViewVideoPayload {
  *
  * Strictly ignores blob:, data:, DRM/EME mediaKeys, and adaptive streaming manifests (.m3u8/.mpd).
  */
+const WEBVIEW_PRELOAD_ADSHIELD_SCRIPT = `
+(function() {
+  try {
+    window.open = function() { return null; };
+    Object.defineProperty(window, 'open', {
+      configurable: false,
+      writable: false,
+      value: function() { return null; }
+    });
+  } catch (e) {}
+})();
+true;
+`;
+
 const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
 (function() {
   if (typeof window === 'undefined' || !window.ReactNativeWebView) {
     return true;
   }
+
+  try {
+    window.open = function() { return null; };
+  } catch (e) {}
+
+  function applyAdShieldDomCleanup() {
+    try {
+      if (document && document.head && !document.getElementById('bdm-adshield-style')) {
+        var styleEl = document.createElement('style');
+        styleEl.id = 'bdm-adshield-style';
+        styleEl.textContent = [
+          'iframe[src*="chatbro"], #chatbro, [id*="chatbro"], [class*="chatbro"],',
+          'iframe[src*="doubleclick"], iframe[src*="googlesyndication"], iframe[src*="adsterra"],',
+          'iframe[src*="exoclick"], iframe[src*="popads"], iframe[src*="propeller"],',
+          'ins.adsbygoogle, .ads, .ads-box, .ad-banner, .ad-container, .ad-wrapper,',
+          '[id^="div-gpt-ad"], [class*="banner-ad"], [data-ad-slot], [data-ad-client]',
+          '{ display: none !important; visibility: hidden !important; width: 0 !important; height: 0 !important; pointer-events: none !important; }'
+        ].join(' ');
+        document.head.appendChild(styleEl);
+      }
+
+      // Remove invisible full-screen click-hijack overlays commonly used on streaming sites
+      var overlays = document.querySelectorAll('body > div, body > a, body > iframe');
+      var curHost = (window.location.hostname || '').toLowerCase();
+      for (var i = 0; i < overlays.length; i++) {
+        var el = overlays[i];
+        var tag = (el.tagName || '').toLowerCase();
+        if (tag === 'a') {
+          var href = (el.getAttribute('href') || '').toLowerCase();
+          if (href && href.indexOf('http') === 0 && curHost && href.indexOf(curHost) === -1) {
+            el.remove();
+            continue;
+          }
+        }
+        var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+        if (cs) {
+          var zIndex = parseInt(cs.zIndex, 10);
+          var pos = cs.position;
+          var opacity = parseFloat(cs.opacity);
+          if ((pos === 'fixed' || pos === 'absolute') && zIndex > 9000) {
+            var rect = el.getBoundingClientRect();
+            var coversScreen = rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8;
+            var isTransparent = opacity < 0.05 || cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent';
+            if (coversScreen && isTransparent && !el.querySelector('video, input, button')) {
+              el.remove();
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  applyAdShieldDomCleanup();
 
   function resolveAbsoluteUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') {
@@ -119,6 +186,7 @@ const WEBVIEW_VIDEO_DETECTION_SCRIPT = `
 
   function scanPageVideos(forceEmit) {
     try {
+      applyAdShieldDomCleanup();
       var seenUrls = {};
       var detectedList = [];
       var pageTitle = (document && document.title) ? document.title.trim() : '';
@@ -407,6 +475,13 @@ true;
 
 export const VideoDetectionService = {
   supportedExtensions: ['mp4', 'webm'] as const,
+
+  /**
+   * Returns a preload script injected before webpage content loads to block window.open popups.
+   */
+  getPreloadAdShieldScript(): string {
+    return WEBVIEW_PRELOAD_ADSHIELD_SCRIPT;
+  },
 
   /**
    * Returns the JavaScript snippet injected into the WebView to inspect HTML5 video

@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
@@ -182,6 +183,37 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     } catch (_: Exception) {}
   }
 
+  private fun syncForegroundServiceState(activeTask: CustomDownloadTask?) {
+    try {
+      val hasActive =
+          customTasks.values.any { it.status == "downloading" || it.status == "pending" }
+      if (hasActive) {
+        val intent =
+            Intent(reactContext, BdmDownloadForegroundService::class.java).apply {
+              action = BdmDownloadForegroundService.ACTION_START
+              if (activeTask != null) {
+                val pct = activeTask.progress.toInt().coerceIn(0, 100)
+                putExtra(
+                    BdmDownloadForegroundService.EXTRA_TITLE,
+                    activeTask.title.ifBlank { activeTask.fileName }
+                )
+                putExtra(
+                    BdmDownloadForegroundService.EXTRA_PROGRESS_TEXT,
+                    "Downloading ($pct%) • Screen-off protection active"
+                )
+              }
+            }
+        ContextCompat.startForegroundService(reactContext, intent)
+      } else {
+        val stopIntent =
+            Intent(reactContext, BdmDownloadForegroundService::class.java).apply {
+              action = BdmDownloadForegroundService.ACTION_STOP
+            }
+        reactContext.startService(stopIntent)
+      }
+    } catch (_: Exception) {}
+  }
+
   private fun emitTaskState(task: CustomDownloadTask) {
     emitProgressEvent(buildTaskWritableMap(task))
     updateNotification(task)
@@ -224,7 +256,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       initialUrl: String,
       refererUrl: String?,
       userAgent: String?,
-      isProbeOnly: Boolean
+      isProbeOnly: Boolean,
+      rangeStartByte: Long = 0L
   ): Pair<HttpURLConnection, String> {
     var currentUrl = initialUrl
     var currentReferer = refererUrl
@@ -234,11 +267,12 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       val conn =
           (URL(currentUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = if (isProbeOnly) 7000 else 15000
-            readTimeout = if (isProbeOnly) 7000 else 30000
+            connectTimeout = if (isProbeOnly) 7000 else 20000
+            readTimeout = if (isProbeOnly) 7000 else 45000
             instanceFollowRedirects = false
             setRequestProperty("Accept", "*/*")
             setRequestProperty("Accept-Encoding", "identity")
+            setRequestProperty("Connection", "keep-alive")
             if (!userAgent.isNullOrBlank()) {
               setRequestProperty("User-Agent", userAgent)
             }
@@ -253,6 +287,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
             }
             if (isProbeOnly) {
               setRequestProperty("Range", "bytes=0-0")
+            } else if (rangeStartByte > 0L) {
+              setRequestProperty("Range", "bytes=$rangeStartByte-")
             }
           }
 
@@ -512,63 +548,105 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     var outStream: OutputStream? = null
 
     try {
+      syncForegroundServiceState(task)
       emitTaskState(task)
-
-      val (resolvedConn, _) = openFollowRedirects(task.url, null, userAgent, false)
-      conn = resolvedConn
-      task.connection = conn
-
-      if (task.cancelled) {
-        conn.disconnect()
-        return
-      }
-
-      val responseCode = conn.responseCode
-      // Accept both HTTP 200 OK and HTTP 206 Partial Content (returned by Cloudflare Workers / CDNs)
-      if (responseCode !in 200..299) {
-        task.status = "failed"
-        task.errorMessage = "Server returned HTTP $responseCode."
-        emitTaskState(task)
-        return
-      }
-
-      val totalBytes = parseTotalBytesFromHeaders(conn)
-      if (totalBytes > 0L) {
-        task.totalBytes = totalBytes
-      }
 
       val output = createDownloadOutputStream(task)
       outStream = output
-      emitTaskState(task)
 
       val buffer = ByteArray(64 * 1024)
-      var bytesRead: Int
       var lastEmitTime = System.currentTimeMillis()
+      var resumeAttempt = 0
+      val maxResumeAttempts = 20
 
-      conn.inputStream.use { input ->
-        while (input.read(buffer).also { bytesRead = it } != -1) {
+      while (!task.cancelled) {
+        try {
+          val resumeOffset = task.bytesDownloaded
+          val (resolvedConn, _) =
+              openFollowRedirects(task.url, null, userAgent, false, resumeOffset)
+          conn = resolvedConn
+          task.connection = conn
+
+          if (task.cancelled) {
+            conn.disconnect()
+            break
+          }
+
+          val responseCode = conn.responseCode
+          if (responseCode !in 200..299) {
+            throw IllegalStateException("Server returned HTTP $responseCode.")
+          }
+
+          if (task.totalBytes <= 0L) {
+            val totalBytes = parseTotalBytesFromHeaders(conn)
+            if (totalBytes > 0L) {
+              task.totalBytes = totalBytes
+            }
+          }
+
+          emitTaskState(task)
+
+          var bytesRead: Int
+          conn.inputStream.use { input ->
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+              if (task.cancelled) {
+                break
+              }
+              output.write(buffer, 0, bytesRead)
+              task.bytesDownloaded += bytesRead
+              // Reset retry counter whenever data is actively flowing
+              resumeAttempt = 0
+
+              if (task.totalBytes > 0L) {
+                task.progress =
+                    ((task.bytesDownloaded.toDouble() / task.totalBytes.toDouble()) * 100.0)
+                        .coerceIn(0.0, 99.9)
+              }
+
+              val now = System.currentTimeMillis()
+              if (now - lastEmitTime >= 450L) {
+                lastEmitTime = now
+                emitTaskState(task)
+              }
+            }
+          }
+
+          output.flush()
+
+          // Check if full file has been downloaded or if stream ended normally
+          if (task.cancelled ||
+              task.totalBytes <= 0L ||
+              task.bytesDownloaded >= task.totalBytes) {
+            break
+          } else {
+            throw java.io.EOFException("Stream closed early before reaching totalBytes")
+          }
+        } catch (streamErr: Exception) {
+          try {
+            conn?.disconnect()
+          } catch (_: Exception) {}
+          conn = null
+          task.connection = null
+
           if (task.cancelled) {
             break
           }
-          output.write(buffer, 0, bytesRead)
-          task.bytesDownloaded += bytesRead
 
-          if (task.totalBytes > 0L) {
-            task.progress =
-                ((task.bytesDownloaded.toDouble() / task.totalBytes.toDouble()) * 100.0)
-                    .coerceIn(0.0, 99.9)
+          resumeAttempt++
+          if (resumeAttempt > maxResumeAttempts) {
+            throw streamErr
           }
 
-          val now = System.currentTimeMillis()
-          if (now - lastEmitTime >= 450L) {
-            lastEmitTime = now
-            emitTaskState(task)
-          }
+          // Wait briefly and auto-resume from task.bytesDownloaded using HTTP Range header
+          try {
+            val backoffMs = (resumeAttempt * 1500L).coerceAtMost(5000L)
+            Thread.sleep(backoffMs)
+          } catch (_: InterruptedException) {}
         }
       }
 
-      outStream.flush()
-      outStream.close()
+      output.flush()
+      output.close()
       outStream = null
 
       if (task.cancelled) {
@@ -625,6 +703,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         conn?.disconnect()
       } catch (_: Exception) {}
       task.connection = null
+      syncForegroundServiceState(null)
     }
   }
 
