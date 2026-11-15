@@ -591,15 +591,37 @@ export const DownloadBottomSheet: React.FC<DownloadBottomSheetProps> = ({
               </View>
 
               <View style={styles.destinationRow}>
-                <ShieldIcon size={14} color={colors.success} />
+                <ShieldIcon
+                  size={14}
+                  color={
+                    selectedVideo.resumable === false
+                      ? colors.warning
+                      : colors.success
+                  }
+                />
                 <Text
                   style={[
                     styles.destinationText,
                     { color: colors.textSecondary },
                   ]}>
-                  Format: {selectedVideo.mimeType}
-                  {formattedSize ? ` • Size: ${formattedSize}` : ''} •
-                  Downloads/BDM
+                  Resume:{' '}
+                  <Text
+                    style={{
+                      fontWeight: '700',
+                      color:
+                        selectedVideo.resumable === true
+                          ? colors.success
+                          : selectedVideo.resumable === false
+                          ? colors.warning
+                          : colors.textSecondary,
+                    }}>
+                    {selectedVideo.resumable === true
+                      ? 'Yes'
+                      : selectedVideo.resumable === false
+                      ? 'No'
+                      : 'Checking...'}
+                  </Text>
+                  {formattedSize ? ` • Size: ${formattedSize}` : ''} • Downloads/BDM
                 </Text>
               </View>
             </View>

@@ -21,6 +21,7 @@ export interface NativeExtractedEmbedVideo {
   quality?: string;
   fileSize?: number;
   durationSeconds?: number;
+  resumable?: boolean;
 }
 
 export interface NativeStreamDetectedEvent {
@@ -33,6 +34,7 @@ export interface NativeDownloadProgressEvent {
   bytesDownloaded: number;
   totalBytes: number;
   progress: number;
+  completedSegments?: number;
   localUri?: string;
   errorMessage?: string;
 }
@@ -56,6 +58,17 @@ interface BdmDownloadNativeInterface {
     userAgent: string | null,
   ): Promise<NativeExtractedEmbedVideo | null>;
   queryDownload(downloadId: string): Promise<NativeDownloadProgressEvent>;
+  pauseDownload(downloadId: string): Promise<boolean>;
+  resumeDownload(
+    downloadId: string,
+    url: string,
+    fileName: string,
+    title: string,
+    mimeType: string,
+    totalBytesHint: number,
+    completedSegmentsHint: number,
+    userAgent: string | null,
+  ): Promise<boolean>;
   cancelDownload(downloadId: string): Promise<boolean>;
   removeDownloadedFile(
     downloadId: string,

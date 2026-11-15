@@ -36,6 +36,7 @@ export interface DetectedVideo {
   quality?: string;
   fileSize?: number;
   durationSeconds?: number;
+  resumable?: boolean;
   detectedAt: number;
 }
 
@@ -61,6 +62,8 @@ export interface DownloadItem {
   downloadedBytes: number;
   progress: number;
   status: DownloadStatus;
+  resumable?: boolean;
+  completedSegments?: number;
   createdAt: number;
   errorMessage?: string;
 }

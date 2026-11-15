@@ -174,6 +174,8 @@ export const BrowserScreen: React.FC = () => {
               typeof v.durationSeconds === 'number' && v.durationSeconds > 0
                 ? Math.round(v.durationSeconds)
                 : undefined,
+            resumable:
+              typeof v.resumable === 'boolean' ? v.resumable : undefined,
             detectedAt: now,
           };
         });

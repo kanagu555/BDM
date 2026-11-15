@@ -684,6 +684,8 @@ export const VideoDetectionService = {
               typeof item.fileSize === 'number' && item.fileSize > 0
                 ? Math.round(item.fileSize)
                 : undefined,
+            resumable:
+              typeof item.resumable === 'boolean' ? item.resumable : undefined,
             detectedAt: now,
           });
         }
@@ -740,6 +742,10 @@ export const VideoDetectionService = {
               typeof probed.fileSize === 'number' && probed.fileSize > 0
                 ? Math.round(probed.fileSize)
                 : video.fileSize,
+            resumable:
+              typeof probed.resumable === 'boolean'
+                ? probed.resumable
+                : video.resumable,
           };
         } catch {
           return video;

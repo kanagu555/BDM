@@ -103,6 +103,38 @@ export const DownloadService = {
     return NativeBdmDownloadModule.queryDownload(downloadId);
   },
 
+  async pauseDownload(downloadId: string): Promise<boolean> {
+    if (!NativeBdmDownloadModule) {
+      return false;
+    }
+    return NativeBdmDownloadModule.pauseDownload(downloadId);
+  },
+
+  async resumeDownload(params: {
+    downloadId: string;
+    url: string;
+    fileName: string;
+    title: string;
+    mimeType: string;
+    totalBytesHint?: number;
+    completedSegmentsHint?: number;
+    userAgent?: string;
+  }): Promise<boolean> {
+    if (!NativeBdmDownloadModule) {
+      throw new Error('Android DownloadManager native module is unavailable.');
+    }
+    return NativeBdmDownloadModule.resumeDownload(
+      params.downloadId,
+      params.url,
+      params.fileName,
+      params.title,
+      params.mimeType,
+      params.totalBytesHint ?? 0,
+      params.completedSegmentsHint ?? 0,
+      params.userAgent ?? null,
+    );
+  },
+
   async cancelDownload(downloadId: string): Promise<boolean> {
     if (!NativeBdmDownloadModule) {
       return false;

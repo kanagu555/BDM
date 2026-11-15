@@ -75,6 +75,8 @@ interface AppStoreState {
     customFileName: string,
   ) => Promise<DownloadItem>;
   applyNativeDownloadProgress: (event: NativeDownloadProgressEvent) => void;
+  pauseDownloadById: (id: string) => Promise<void>;
+  resumeDownloadById: (id: string) => Promise<void>;
   cancelDownloadById: (id: string) => Promise<void>;
   deleteDownloadById: (id: string) => Promise<void>;
   clearDownloadsList: () => void;
@@ -132,6 +134,13 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const restoredDownloads = Array.isArray(parsed.downloads)
         ? parsed.downloads.map((item): DownloadItem => {
             if (item.status === 'downloading' || item.status === 'pending') {
+              if (item.downloadedBytes > 0 && item.resumable !== false) {
+                return {
+                  ...item,
+                  status: 'paused',
+                  errorMessage: undefined,
+                };
+              }
               return {
                 ...item,
                 status: 'failed',
@@ -330,6 +339,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       downloadedBytes: 0,
       progress: 0,
       status: 'downloading',
+      resumable: video.resumable,
+      completedSegments: 0,
       createdAt: Date.now(),
     };
 
@@ -371,6 +382,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
             event.status === 'completed'
               ? 100
               : Math.round(event.progress * 10) / 10,
+          completedSegments:
+            typeof event.completedSegments === 'number'
+              ? event.completedSegments
+              : item.completedSegments,
           localUri: event.localUri || item.localUri,
           errorMessage: event.errorMessage || item.errorMessage,
         };
@@ -379,6 +394,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       if (
         prevStatus !== event.status ||
         event.status === 'completed' ||
+        event.status === 'paused' ||
         event.status === 'failed' ||
         event.status === 'cancelled'
       ) {
@@ -387,6 +403,60 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
       return {
         downloads: updatedDownloads,
+      };
+    });
+  },
+
+  pauseDownloadById: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      return;
+    }
+    try {
+      await DownloadService.pauseDownload(target.downloadManagerId);
+    } catch {
+      // Ignore if already stopped
+    }
+    set((state) => {
+      const updated = state.downloads.map((d) =>
+        d.id === id ? { ...d, status: 'paused' as const } : d,
+      );
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
+      };
+    });
+  },
+
+  resumeDownloadById: async (id: string) => {
+    const target = get().downloads.find((d) => d.id === id);
+    if (!target) {
+      return;
+    }
+    const isDesktop = get().isDesktopMode;
+    await DownloadService.resumeDownload({
+      downloadId: target.downloadManagerId,
+      url: target.url,
+      fileName: target.fileName,
+      title: target.title,
+      mimeType: target.mimeType,
+      totalBytesHint: target.fileSize,
+      completedSegmentsHint: target.completedSegments ?? 0,
+      userAgent: BrowserService.getUserAgent(isDesktop),
+    });
+    set((state) => {
+      const updated = state.downloads.map((d) =>
+        d.id === id
+          ? {
+              ...d,
+              status: 'downloading' as const,
+              errorMessage: undefined,
+            }
+          : d,
+      );
+      persistAppState(state.themeMode, updated);
+      return {
+        downloads: updated,
       };
     });
   },

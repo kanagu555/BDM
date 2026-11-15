@@ -65,7 +65,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       val fileSize: Long,
       val mimeType: String,
       val extension: String,
-      val isValidMedia: Boolean = true
+      val isValidMedia: Boolean = true,
+      val resumable: Boolean = false
   )
 
   private class CustomDownloadTask(
@@ -80,9 +81,11 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     @Volatile var bytesDownloaded: Long = 0L
     @Volatile var totalBytes: Long = 0L
     @Volatile var progress: Double = 0.0
+    @Volatile var completedSegments: Int = 0
     @Volatile var localUri: String? = null
     @Volatile var errorMessage: String? = null
     @Volatile var cancelled: Boolean = false
+    @Volatile var paused: Boolean = false
     @Volatile var connection: HttpURLConnection? = null
     @Volatile var contentUri: Uri? = null
     @Volatile var destFile: File? = null
@@ -193,7 +196,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
               .setAutoCancel(true)
           notificationManager.notify(task.notificationId, builder.build())
         }
-        "cancelled" -> {
+        "cancelled", "paused" -> {
           notificationManager.cancel(task.notificationId)
         }
       }
@@ -207,6 +210,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     map.putDouble("bytesDownloaded", task.bytesDownloaded.toDouble())
     map.putDouble("totalBytes", task.totalBytes.toDouble())
     map.putDouble("progress", task.progress)
+    map.putInt("completedSegments", task.completedSegments)
     if (!task.localUri.isNullOrBlank()) {
       map.putString("localUri", task.localUri)
     }
@@ -432,12 +436,15 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
               "mp4"
             }
         val mime = if (ext == "webm") "video/webm" else "video/mp4"
+        val acceptRanges = (conn.getHeaderField("Accept-Ranges") ?: "").lowercase()
+        val isResumable = code == 206 || (acceptRanges.contains("bytes") && !acceptRanges.contains("none"))
         ProbedStreamInfo(
             finalUrl = finalUrl,
             fileSize = totalBytes,
             mimeType = mime,
             extension = ext,
-            isValidMedia = true
+            isValidMedia = true,
+            resumable = isResumable
         )
       } else {
         ProbedStreamInfo(
@@ -695,6 +702,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
               map.putString("originalUrl", url)
               map.putString("extension", "mp4")
               map.putString("mimeType", "application/x-mpegURL")
+              map.putBoolean("resumable", true)
               if (!v.qualityLabel.isNullOrBlank()) {
                 map.putString("quality", v.qualityLabel)
               }
@@ -729,6 +737,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
             map.putString("originalUrl", url)
             map.putString("extension", "mp4")
             map.putString("mimeType", "application/x-mpegURL")
+            map.putBoolean("resumable", true)
             if (!qLabel.isNullOrBlank()) {
               map.putString("quality", qLabel)
             }
@@ -756,6 +765,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           map.putString("originalUrl", url)
           map.putString("extension", probed.extension)
           map.putString("mimeType", probed.mimeType)
+          map.putBoolean("resumable", probed.resumable)
           if (!qLabel.isNullOrBlank()) {
             map.putString("quality", qLabel)
           }
@@ -790,6 +800,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         map.putString("title", "")
         map.putString("extension", probed.extension)
         map.putString("mimeType", probed.mimeType)
+        map.putBoolean("resumable", probed.resumable)
         if (probed.fileSize > 0L) {
           map.putDouble("fileSize", probed.fileSize.toDouble())
         }
@@ -895,6 +906,23 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
     return FileOutputStream(candidateFile)
   }
 
+  private fun getPartialsDir(): File {
+    val dir = File(reactContext.filesDir, "bdm_partials")
+    if (!dir.exists()) {
+      dir.mkdirs()
+    }
+    return dir
+  }
+
+  private fun getDirectPartFile(downloadId: String): File =
+      File(getPartialsDir(), "bdm_part_$downloadId.tmp")
+
+  private fun getHlsPartTsFile(downloadId: String): File =
+      File(getPartialsDir(), "bdm_hls_$downloadId.ts")
+
+  private fun getHlsPartMp4File(downloadId: String): File =
+      File(getPartialsDir(), "bdm_hls_$downloadId.mp4")
+
   private fun cleanupPartialDownload(task: CustomDownloadTask) {
     try {
       task.contentUri?.let { uri ->
@@ -907,6 +935,18 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           file.delete()
         }
       }
+    } catch (_: Exception) {}
+    try {
+      val directPart = getDirectPartFile(task.downloadId)
+      if (directPart.exists()) directPart.delete()
+    } catch (_: Exception) {}
+    try {
+      val hlsTs = getHlsPartTsFile(task.downloadId)
+      if (hlsTs.exists()) hlsTs.delete()
+    } catch (_: Exception) {}
+    try {
+      val hlsMp4 = getHlsPartMp4File(task.downloadId)
+      if (hlsMp4.exists()) hlsMp4.delete()
     } catch (_: Exception) {}
   }
 
@@ -1022,8 +1062,8 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun executeHlsDownload(task: CustomDownloadTask, userAgent: String?) {
-    val tempTsFile = File(reactContext.cacheDir, "bdm_hls_${task.downloadId}.ts")
-    val tempMp4File = File(reactContext.cacheDir, "bdm_hls_${task.downloadId}.mp4")
+    val tempTsFile = getHlsPartTsFile(task.downloadId)
+    val tempMp4File = getHlsPartMp4File(task.downloadId)
     var outStream: OutputStream? = null
 
     try {
@@ -1131,21 +1171,32 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
 
       val keyCache = HashMap<String, ByteArray>()
       var lastEmitTime = System.currentTimeMillis()
+      val isResuming = task.completedSegments > 0 && tempTsFile.exists() && tempTsFile.length() > 0L
+      val startSegmentIdx = if (isResuming) task.completedSegments.coerceIn(0, segments.size) else 0
+      if (!isResuming) {
+        task.bytesDownloaded = 0L
+        task.completedSegments = 0
+      } else {
+        task.bytesDownloaded = tempTsFile.length()
+      }
 
-      FileOutputStream(tempTsFile).use { tsOut ->
-        if (initMapUrl != null && !task.cancelled) {
+      FileOutputStream(tempTsFile, isResuming).use { tsOut ->
+        if (!isResuming && initMapUrl != null && !task.cancelled && !task.paused) {
           val initBytes = downloadBytesWithRetry(initMapUrl, userAgent, headers, task)
           tsOut.write(initBytes)
           task.bytesDownloaded += initBytes.size
         }
 
         val totalSegments = segments.size
-        for (i in 0 until totalSegments) {
-          if (task.cancelled) {
+        for (i in startSegmentIdx until totalSegments) {
+          if (task.cancelled || task.paused) {
             break
           }
           val seg = segments[i]
           var segBytes = downloadBytesWithRetry(seg.url, userAgent, headers, task)
+          if (task.cancelled || task.paused) {
+            break
+          }
 
           if (seg.keyUri != null) {
             val keyBytes =
@@ -1175,6 +1226,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           task.bytesDownloaded += segBytes.size
 
           val completedSegs = i + 1
+          task.completedSegments = completedSegs
           val avgSegBytes = task.bytesDownloaded / completedSegs.coerceAtLeast(1)
           task.totalBytes = avgSegBytes * totalSegments
           task.progress = ((completedSegs.toDouble() / totalSegments.toDouble()) * 95.0).coerceIn(0.0, 95.0)
@@ -1189,8 +1241,15 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       }
 
       if (task.cancelled) {
+        cleanupPartialDownload(task)
         task.status = "cancelled"
         task.progress = 0.0
+        emitTaskState(task)
+        return
+      }
+
+      if (task.paused) {
+        task.status = "paused"
         emitTaskState(task)
         return
       }
@@ -1247,16 +1306,25 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       task.status = "completed"
       task.progress = 100.0
       emitTaskState(task)
+      try {
+        if (tempTsFile.exists()) tempTsFile.delete()
+      } catch (_: Exception) {}
+      try {
+        if (tempMp4File.exists()) tempMp4File.delete()
+      } catch (_: Exception) {}
     } catch (e: Exception) {
       try {
         outStream?.close()
       } catch (_: Exception) {}
-      cleanupPartialDownload(task)
 
       if (task.cancelled) {
+        cleanupPartialDownload(task)
         task.status = "cancelled"
         task.progress = 0.0
+      } else if (task.paused) {
+        task.status = "paused"
       } else {
+        cleanupPartialDownload(task)
         task.status = "failed"
         task.errorMessage = e.message ?: "HLS video download failed."
       }
@@ -1265,12 +1333,11 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       try {
         outStream?.close()
       } catch (_: Exception) {}
-      try {
-        if (tempTsFile.exists()) tempTsFile.delete()
-      } catch (_: Exception) {}
-      try {
-        if (tempMp4File.exists()) tempMp4File.delete()
-      } catch (_: Exception) {}
+      if (!task.paused) {
+        try {
+          if (tempMp4File.exists()) tempMp4File.delete()
+        } catch (_: Exception) {}
+      }
       syncForegroundServiceState(null)
     }
   }
@@ -1284,6 +1351,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       return
     }
 
+    val partFile = getDirectPartFile(task.downloadId)
     var conn: HttpURLConnection? = null
     var outStream: OutputStream? = null
 
@@ -1291,8 +1359,11 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       syncForegroundServiceState(task)
       emitTaskState(task)
 
-      val output = createDownloadOutputStream(task)
-      outStream = output
+      if (partFile.exists()) {
+        task.bytesDownloaded = partFile.length()
+      } else {
+        task.bytesDownloaded = 0L
+      }
 
       val buffer = ByteArray(64 * 1024)
       var lastEmitTime = System.currentTimeMillis()
@@ -1301,15 +1372,16 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
 
       val sniffedHeaders = sniffedHeadersByUrl[task.url]
 
-      while (!task.cancelled) {
+      while (!task.cancelled && !task.paused) {
         try {
-          val resumeOffset = task.bytesDownloaded
+          val resumeOffset = if (partFile.exists()) partFile.length() else 0L
+          task.bytesDownloaded = resumeOffset
           val (resolvedConn, _) =
               openFollowRedirects(task.url, null, userAgent, false, resumeOffset, sniffedHeaders)
           conn = resolvedConn
           task.connection = conn
 
-          if (task.cancelled) {
+          if (task.cancelled || task.paused) {
             conn.disconnect()
             break
           }
@@ -1317,6 +1389,12 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           val responseCode = conn.responseCode
           if (responseCode !in 200..299) {
             throw IllegalStateException("Server returned HTTP $responseCode.")
+          }
+
+          // If we asked for Range > 0 and server returned 206, append; if server returned 200, restart cleanly
+          val appendMode = resumeOffset > 0L && responseCode == 206
+          if (!appendMode) {
+            task.bytesDownloaded = 0L
           }
 
           if (task.totalBytes <= 0L) {
@@ -1328,35 +1406,37 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
 
           emitTaskState(task)
 
-          var bytesRead: Int
-          conn.inputStream.use { input ->
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-              if (task.cancelled) {
-                break
-              }
-              output.write(buffer, 0, bytesRead)
-              task.bytesDownloaded += bytesRead
-              // Reset retry counter whenever data is actively flowing
-              resumeAttempt = 0
+          FileOutputStream(partFile, appendMode).use { partOut ->
+            var bytesRead: Int
+            resolvedConn.inputStream.use { input ->
+              while (input.read(buffer).also { bytesRead = it } != -1) {
+                if (task.cancelled || task.paused) {
+                  break
+                }
+                partOut.write(buffer, 0, bytesRead)
+                task.bytesDownloaded += bytesRead
+                // Reset retry counter whenever data is actively flowing
+                resumeAttempt = 0
 
-              if (task.totalBytes > 0L) {
-                task.progress =
-                    ((task.bytesDownloaded.toDouble() / task.totalBytes.toDouble()) * 100.0)
-                        .coerceIn(0.0, 99.9)
-              }
+                if (task.totalBytes > 0L) {
+                  task.progress =
+                      ((task.bytesDownloaded.toDouble() / task.totalBytes.toDouble()) * 98.0)
+                          .coerceIn(0.0, 98.0)
+                }
 
-              val now = System.currentTimeMillis()
-              if (now - lastEmitTime >= 450L) {
-                lastEmitTime = now
-                emitTaskState(task)
+                val now = System.currentTimeMillis()
+                if (now - lastEmitTime >= 450L) {
+                  lastEmitTime = now
+                  emitTaskState(task)
+                }
               }
             }
+            partOut.flush()
           }
-
-          output.flush()
 
           // Check if full file has been downloaded or if stream ended normally
           if (task.cancelled ||
+              task.paused ||
               task.totalBytes <= 0L ||
               task.bytesDownloaded >= task.totalBytes) {
             break
@@ -1370,7 +1450,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           conn = null
           task.connection = null
 
-          if (task.cancelled) {
+          if (task.cancelled || task.paused) {
             break
           }
 
@@ -1387,10 +1467,6 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         }
       }
 
-      output.flush()
-      output.close()
-      outStream = null
-
       if (task.cancelled) {
         cleanupPartialDownload(task)
         task.status = "cancelled"
@@ -1398,6 +1474,29 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
         emitTaskState(task)
         return
       }
+
+      if (task.paused) {
+        task.status = "paused"
+        emitTaskState(task)
+        return
+      }
+
+      // Stream completed partial file into public Downloads/BDM
+      task.progress = 99.0
+      emitTaskState(task)
+
+      val output = createDownloadOutputStream(task)
+      outStream = output
+      FileInputStream(partFile).use { input ->
+        val copyBuf = ByteArray(128 * 1024)
+        var r: Int
+        while (input.read(copyBuf).also { r = it } != -1) {
+          output.write(copyBuf, 0, r)
+        }
+      }
+      output.flush()
+      output.close()
+      outStream = null
 
       if (task.totalBytes <= 0L && task.bytesDownloaded > 0L) {
         task.totalBytes = task.bytesDownloaded
@@ -1423,16 +1522,22 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       task.status = "completed"
       task.progress = 100.0
       emitTaskState(task)
+      try {
+        if (partFile.exists()) partFile.delete()
+      } catch (_: Exception) {}
     } catch (e: Exception) {
       try {
         outStream?.close()
       } catch (_: Exception) {}
-      cleanupPartialDownload(task)
 
       if (task.cancelled) {
+        cleanupPartialDownload(task)
         task.status = "cancelled"
         task.progress = 0.0
+      } else if (task.paused) {
+        task.status = "paused"
       } else {
+        cleanupPartialDownload(task)
         task.status = "failed"
         task.errorMessage = e.message ?: "Network HTTP transfer error."
       }
@@ -1720,6 +1825,7 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
           itemMap.putString("title", fullTitle)
           itemMap.putString("extension", probed.extension)
           itemMap.putString("mimeType", probed.mimeType)
+          itemMap.putBoolean("resumable", probed.resumable)
           if (!quality.isNullOrBlank()) {
             itemMap.putString("quality", quality.uppercase().replace("P", "p"))
           }
@@ -1815,6 +1921,80 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
       promise.reject("QUERY_FAILED", "Unable to query download $downloadIdStr")
     } catch (e: Exception) {
       promise.reject("QUERY_ERROR", e.message, e)
+    }
+  }
+
+  @ReactMethod
+  fun pauseDownload(downloadIdStr: String, promise: Promise) {
+    try {
+      val customTask = customTasks[downloadIdStr]
+      if (customTask != null) {
+        customTask.paused = true
+        customTask.status = "paused"
+        try {
+          customTask.connection?.disconnect()
+        } catch (_: Exception) {}
+        emitTaskState(customTask)
+        syncForegroundServiceState(null)
+        promise.resolve(true)
+        return
+      }
+      promise.resolve(false)
+    } catch (e: Exception) {
+      promise.reject("PAUSE_ERROR", e.message ?: "Failed to pause download", e)
+    }
+  }
+
+  @ReactMethod
+  fun resumeDownload(
+      downloadIdStr: String,
+      url: String,
+      fileName: String,
+      title: String,
+      mimeType: String,
+      totalBytesHint: Double,
+      completedSegmentsHint: Int,
+      userAgent: String?,
+      promise: Promise
+  ) {
+    try {
+      var task = customTasks[downloadIdStr]
+      if (task == null) {
+        val ext = if (mimeType.contains("webm", ignoreCase = true)) "webm" else "mp4"
+        val cleanTitle = unescapeDisplayTitle(title.ifBlank { fileName })
+        val safeFileName = sanitizeFileName(unescapeDisplayTitle(fileName), ext)
+        val resolvedMime = mimeType.ifBlank { "video/$ext" }
+        val notificationId = (downloadIdStr.hashCode() and 0x7FFFFFFF).coerceAtLeast(1001)
+        task =
+            CustomDownloadTask(
+                downloadId = downloadIdStr,
+                url = url.trim(),
+                fileName = safeFileName,
+                title = cleanTitle.ifBlank { safeFileName },
+                mimeType = resolvedMime,
+                notificationId = notificationId
+            )
+        if (totalBytesHint > 0) {
+          task.totalBytes = totalBytesHint.toLong()
+        }
+        if (completedSegmentsHint > 0) {
+          task.completedSegments = completedSegmentsHint
+        }
+        customTasks[downloadIdStr] = task
+      }
+
+      task.paused = false
+      task.cancelled = false
+      task.status = "downloading"
+      task.errorMessage = null
+
+      val activeTask = task
+      promise.resolve(true)
+      downloadExecutor.execute {
+        executeCustomDownload(activeTask, userAgent)
+      }
+    } catch (e: Exception) {
+      promise.reject("RESUME_ERROR", e.message ?: "Failed to resume download", e)
     }
   }
 

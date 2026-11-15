@@ -18,6 +18,7 @@ import {
   CloseIcon,
   DownloadIcon,
   MoreVerticalIcon,
+  PauseIcon,
   PlayIcon,
   ReloadIcon,
   ShareIcon,
@@ -48,6 +49,8 @@ export const DownloadsScreen: React.FC = () => {
     useNavigation<BottomTabNavigationProp<RootTabParamList>>();
 
   const downloads = useAppStore((state) => state.downloads);
+  const pauseDownloadById = useAppStore((state) => state.pauseDownloadById);
+  const resumeDownloadById = useAppStore((state) => state.resumeDownloadById);
   const cancelDownloadById = useAppStore((state) => state.cancelDownloadById);
   const deleteDownloadById = useAppStore((state) => state.deleteDownloadById);
   const clearDownloadsList = useAppStore((state) => state.clearDownloadsList);
@@ -99,6 +102,22 @@ export const DownloadsScreen: React.FC = () => {
       await shareDownloadedVideo(item.id);
     } catch (err: any) {
       showFeedback(err?.message || 'Unable to share video file.');
+    }
+  };
+
+  const handlePauseDownload = async (item: DownloadItem) => {
+    setMenuTargetItem(null);
+    await pauseDownloadById(item.id);
+    showFeedback(`Paused "${item.fileName}"`);
+  };
+
+  const handleResumeDownload = async (item: DownloadItem) => {
+    setMenuTargetItem(null);
+    try {
+      await resumeDownloadById(item.id);
+      showFeedback(`Resuming "${item.fileName}"`);
+    } catch (err: any) {
+      showFeedback(err?.message || 'Unable to resume download.');
     }
   };
 
@@ -246,16 +265,27 @@ export const DownloadsScreen: React.FC = () => {
 
           {/* Quick Inline Action + More Options Menu Button */}
           <View style={styles.itemActionsCol}>
-            {isActive ? (
+            {item.status === 'paused' ? (
               <TouchableOpacity
                 accessibilityRole="button"
-                accessibilityLabel="Cancel download"
-                onPress={() => handleCancelDownload(item)}
+                accessibilityLabel="Resume download"
+                onPress={() => handleResumeDownload(item)}
                 style={[
                   styles.quickActionCircle,
-                  { backgroundColor: `${colors.error}18` },
+                  { backgroundColor: colors.primary },
                 ]}>
-                <CloseIcon size={15} color={colors.error} />
+                <PlayIcon size={14} color="#FFFFFF" />
+              </TouchableOpacity>
+            ) : isActive ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Pause download"
+                onPress={() => handlePauseDownload(item)}
+                style={[
+                  styles.quickActionCircle,
+                  { backgroundColor: colors.primarySoft },
+                ]}>
+                <PauseIcon size={14} color={colors.primary} />
               </TouchableOpacity>
             ) : isCompleted ? (
               <TouchableOpacity
@@ -624,7 +654,43 @@ export const DownloadsScreen: React.FC = () => {
                   </>
                 ) : null}
 
-                {/* Active Action: Cancel Download */}
+                {/* Active Action: Pause / Resume & Cancel Download */}
+                {menuTargetItem.status === 'paused' ? (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => handleResumeDownload(menuTargetItem)}
+                    style={[
+                      styles.sheetOptionRow,
+                      { borderBottomColor: colors.border },
+                    ]}>
+                    <PlayIcon size={18} color={colors.primary} />
+                    <Text
+                      style={[
+                        styles.sheetOptionText,
+                        { color: colors.textPrimary },
+                      ]}>
+                      Resume Download
+                    </Text>
+                  </TouchableOpacity>
+                ) : isActiveStatus(menuTargetItem.status) ? (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => handlePauseDownload(menuTargetItem)}
+                    style={[
+                      styles.sheetOptionRow,
+                      { borderBottomColor: colors.border },
+                    ]}>
+                    <PauseIcon size={18} color={colors.primary} />
+                    <Text
+                      style={[
+                        styles.sheetOptionText,
+                        { color: colors.textPrimary },
+                      ]}>
+                      Pause Download
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
                 {isActiveStatus(menuTargetItem.status) ? (
                   <TouchableOpacity
                     activeOpacity={0.8}

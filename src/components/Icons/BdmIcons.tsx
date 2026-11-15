@@ -300,6 +300,13 @@ export const PlayIcon: React.FC<IconProps> = ({ size = 18, color = '#FFFFFF' }) 
   </Svg>
 );
 
+export const PauseIcon: React.FC<IconProps> = ({ size = 18, color = '#FFFFFF' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Rect x="6" y="5" width="4" height="14" rx="1.2" fill={color} />
+    <Rect x="14" y="5" width="4" height="14" rx="1.2" fill={color} />
+  </Svg>
+);
+
 export const CheckCircleIcon: React.FC<IconProps> = ({ size = 16, color = '#10B981' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2" />
