@@ -865,13 +865,23 @@ class BdmDownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun createDownloadOutputStream(task: CustomDownloadTask): OutputStream {
+    val outputMime =
+        if (task.mimeType.contains("mpegurl", ignoreCase = true) ||
+            task.fileName.endsWith(".mp4", ignoreCase = true)) {
+          "video/mp4"
+        } else if (task.fileName.endsWith(".webm", ignoreCase = true)) {
+          "video/webm"
+        } else {
+          task.mimeType
+        }
+
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       try {
         val resolver = reactContext.contentResolver
         val values =
             ContentValues().apply {
               put(MediaStore.MediaColumns.DISPLAY_NAME, task.fileName)
-              put(MediaStore.MediaColumns.MIME_TYPE, task.mimeType)
+              put(MediaStore.MediaColumns.MIME_TYPE, outputMime)
               put(
                   MediaStore.MediaColumns.RELATIVE_PATH,
                   "${Environment.DIRECTORY_DOWNLOADS}/BDM"

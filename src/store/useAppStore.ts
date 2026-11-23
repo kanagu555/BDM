@@ -193,15 +193,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       let changed = false;
 
       for (const incoming of videos) {
-        const existingIdx = nextList.findIndex(
-          (v) =>
-            v.url === incoming.url ||
-            (v.originalUrl && v.originalUrl === incoming.url) ||
-            (incoming.originalUrl && v.url === incoming.originalUrl) ||
-            (incoming.originalUrl &&
-              v.originalUrl &&
-              v.originalUrl === incoming.originalUrl),
-        );
+        const existingIdx = nextList.findIndex((v) => v.url === incoming.url);
 
         if (existingIdx >= 0) {
           const current = nextList[existingIdx];
@@ -209,15 +201,26 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
             ...current,
             url: incoming.url || current.url,
             originalUrl: incoming.originalUrl || current.originalUrl,
+            title:
+              incoming.title &&
+              incoming.title.length > (current.title?.length || 0)
+                ? incoming.title
+                : current.title,
             fileSize: incoming.fileSize || current.fileSize,
             quality: incoming.quality || current.quality,
             durationSeconds:
               incoming.durationSeconds || current.durationSeconds,
+            resumable:
+              typeof incoming.resumable === 'boolean'
+                ? incoming.resumable
+                : current.resumable,
           };
           if (
             updated.url !== current.url ||
+            updated.title !== current.title ||
             updated.fileSize !== current.fileSize ||
-            updated.quality !== current.quality
+            updated.quality !== current.quality ||
+            updated.durationSeconds !== current.durationSeconds
           ) {
             nextList[existingIdx] = updated;
             changed = true;

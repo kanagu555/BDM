@@ -288,7 +288,7 @@ export const SettingsScreen: React.FC = () => {
               </Text>
               <Text
                 style={[styles.versionValue, { color: colors.textPrimary }]}>
-                1.0.7 (Build 8)
+                1.0.8 (Build 9)
               </Text>
             </View>
 

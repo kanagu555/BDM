@@ -143,14 +143,14 @@ export const BrowserScreen: React.FC = () => {
       const isGenericPortalTitle =
         !rawPageTitle ||
         /watch anime online/i.test(rawPageTitle) ||
-        /^9anime$/i.test(rawPageTitle);
+        /^9anime(\.[a-z]+)?$/i.test(rawPageTitle);
       let activeTitle = rawPageTitle || 'Detected Video';
-      if (isGenericPortalTitle && activeUrl) {
+      if ((isGenericPortalTitle || /\/watch\//i.test(activeUrl)) && activeUrl) {
         try {
           const parsedUrl = new URL(activeUrl);
           const segments = parsedUrl.pathname.split('/').filter(Boolean);
           const lastSlug = segments[segments.length - 1] || '';
-          if (lastSlug && lastSlug.length > 2) {
+          if (lastSlug && lastSlug.length > 2 && isGenericPortalTitle) {
             activeTitle = lastSlug
               .replace(/[-_]+/g, ' ')
               .replace(/\b\w/g, (c) => c.toUpperCase());
