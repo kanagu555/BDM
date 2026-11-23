@@ -568,7 +568,7 @@ export const VideoDetectionService = {
 
         const ext: 'mp4' | 'webm' =
           item.extension === 'webm' ||
-          rawUrl.toLowerCase().split('?')[0].endsWith('.webm')
+            rawUrl.toLowerCase().split('?')[0].endsWith('.webm')
             ? 'webm'
             : 'mp4';
 
@@ -578,8 +578,17 @@ export const VideoDetectionService = {
             ? item.title.trim()
             : `Video ${results.length + 1}`;
 
+        const hashUrl = (u: string): string => {
+          let h = 2166136261;
+          for (let k = 0; k < u.length; k++) {
+            h ^= u.charCodeAt(k);
+            h = Math.imul(h, 16777619);
+          }
+          return (h >>> 0).toString(36);
+        };
+
         results.push({
-          id: `vid-${ext}-${i}-${rawUrl.length}`,
+          id: `vid-${ext}-${hashUrl(rawUrl)}`,
           url: rawUrl,
           originalUrl: rawUrl,
           title: cleanTitle,
@@ -600,8 +609,8 @@ export const VideoDetectionService = {
 
       const iframeUrls = Array.isArray(parsed.iframeUrls)
         ? parsed.iframeUrls.filter(
-            (u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u),
-          )
+          (u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u),
+        )
         : [];
 
       return {
@@ -665,8 +674,17 @@ export const VideoDetectionService = {
             item.title && item.title.trim().length > 0
               ? item.title.trim()
               : fallbackPageTitle || `Embedded Video ${extractedList.length + 1}`;
+          const hashUrl = (u: string): string => {
+            let h = 2166136261;
+            for (let k = 0; k < u.length; k++) {
+              h ^= u.charCodeAt(k);
+              h = Math.imul(h, 16777619);
+            }
+            return (h >>> 0).toString(36);
+          };
+
           extractedList.push({
-            id: `vid-embed-${ext}-${extractedList.length}-${url.length}`,
+            id: `vid-embed-${ext}-${hashUrl(url)}`,
             url,
             originalUrl:
               typeof item.originalUrl === 'string' && item.originalUrl.trim()

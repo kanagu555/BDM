@@ -138,16 +138,42 @@ export const BrowserScreen: React.FC = () => {
         return;
       }
       const stateSnapshot = useAppStore.getState();
-      const activeTitle =
-        stateSnapshot.pageTitle && stateSnapshot.pageTitle.trim()
-          ? stateSnapshot.pageTitle.trim()
-          : 'Detected Video';
       const activeUrl = stateSnapshot.currentUrl;
+      const rawPageTitle = (stateSnapshot.pageTitle || '').trim();
+      const isGenericPortalTitle =
+        !rawPageTitle ||
+        /watch anime online/i.test(rawPageTitle) ||
+        /^9anime$/i.test(rawPageTitle);
+      let activeTitle = rawPageTitle || 'Detected Video';
+      if (isGenericPortalTitle && activeUrl) {
+        try {
+          const parsedUrl = new URL(activeUrl);
+          const segments = parsedUrl.pathname.split('/').filter(Boolean);
+          const lastSlug = segments[segments.length - 1] || '';
+          if (lastSlug && lastSlug.length > 2) {
+            activeTitle = lastSlug
+              .replace(/[-_]+/g, ' ')
+              .replace(/\b\w/g, (c) => c.toUpperCase());
+          }
+        } catch {
+          // Keep fallback title
+        }
+      }
       const now = Date.now();
+
+      const hashUrl = (u: string): string => {
+        let h = 2166136261;
+        for (let i = 0; i < u.length; i++) {
+          h ^= u.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        return (h >>> 0).toString(36);
+      };
 
       const mapped: DetectedVideo[] = payload.videos
         .filter((v) => v && typeof v.url === 'string' && v.url.trim().length > 0)
-        .map((v, idx) => {
+        .map((v) => {
+          const cleanUrl = v.url.trim();
           const qualitySuffix =
             v.quality && !activeTitle.toLowerCase().includes(v.quality.toLowerCase())
               ? ` (${v.quality})`
@@ -158,9 +184,9 @@ export const BrowserScreen: React.FC = () => {
               : `${activeTitle}${qualitySuffix}`;
           const ext: 'mp4' | 'webm' = v.extension === 'webm' ? 'webm' : 'mp4';
           return {
-            id: `vid-sniff-${ext}-${idx}-${v.url.length}`,
-            url: v.url.trim(),
-            originalUrl: v.originalUrl || v.url.trim(),
+            id: `vid-sniff-${ext}-${hashUrl(cleanUrl)}`,
+            url: cleanUrl,
+            originalUrl: v.originalUrl || cleanUrl,
             title,
             extension: ext,
             mimeType: v.mimeType || (ext === 'webm' ? 'video/webm' : 'video/mp4'),
